@@ -164,18 +164,21 @@ Module Type AxiomaticSemantics.
         l ↦ᵢ - ⊢ WP Write (Cloc l) e @ E {{ x, ⌜x = VConst Cunit⌝ ∗ l ↦ᵢ v }}.
 
     (** Axiomatization of wait permissions. *)
-    Parameter wait: tid → (positive → val → iProp Σ) → iProp Σ.
+    Parameter wait: tid → (val → iProp Σ) → iProp Σ.
+    Parameter waitN: namespace.
     Declare Instance wait_nonexpansive t n:
-      Proper (pointwise_relation _ (pointwise_relation _ (dist n)) ==> dist n) (wait t).
+      Proper (pointwise_relation _ (dist n) ==> dist n) (wait t).
     Axiom wait_split: ∀ t ϕ₁ ϕ₂,
-        wait t (λ q v, ϕ₁ q v ∗ ϕ₂ q v) ≡ wait t ϕ₁ ∗ wait t ϕ₂.
+        wait t (λ v, ϕ₁ v ∗ ϕ₂ v) ={↑waitN}=∗ wait t ϕ₁ ∗ wait t ϕ₂.
+    Axiom wait_combine: ∀ t ϕ₁ ϕ₂,
+        wait t ϕ₁ ∗ wait t ϕ₂ ={↑waitN}=∗ wait t (λ v, ϕ₁ v ∗ ϕ₂ v).
 
     (** Task operations *)
-    Axiom wp_post: ∀ E (p: positive) e ϕ,
-        WP e {{ ϕ p }} ⊢
-        WP Post e @ E {{ v, ∃ t, ⌜v = VConst (Ctid t)⌝ ∗ wait t ϕ ∗ task_agree t p }}.
+    Axiom wp_post: ∀ E e ϕ,
+        WP e {{ ϕ }} ⊢
+        WP Post e @ E {{ v, ∃ t, ⌜v = VConst (Ctid t)⌝ ∗ wait t ϕ }}.
     Axiom wp_wait: ∀ E t ϕ,
-        wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ∃ p, ϕ p v ∗ task_agree t p }}.
+        wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ϕ v }}.
     
     (** Meta-theory and bind rule; this duplicates parts of [program_logic/weakestpre],
         namely everything that requires unfolding. The rest can be shown from these axioms. *)
@@ -610,8 +613,7 @@ Section Simulation.
   Qed.
 
   Lemma simulate_done_schedule p' v e e' (is_val: to_val e = Some v):
-    ctx -∗ p ⤇ active: e -∗ p' ⤇ run: e'
-                                      ={E}=∗ p ⤇ done: v ∗ p' ⤇ active: e'.
+    ctx -∗ p ⤇ active: e -∗ p' ⤇ run: e' ={E}=∗ p ⤇ done: v ∗ p' ⤇ active: e'.
   Proof.
     iApply simulate_schedule_step.
     intros * taskp taskp'.
@@ -619,3 +621,14 @@ Section Simulation.
     exists e'; done.
   Qed.
 End Simulation.
+
+Section ExistentialTriple.
+  Context `{specStateG Σ, invG Σ, inG Σ heapR} (E: coPset) (c: cfg).
+  Definition existential_triple (ϕ: iProp Σ) e (ϕ': val → iProp Σ): iProp Σ :=
+    (∀ p K, spec_ctx c -∗ ϕ -∗ p ⤇ active: fill_ctx e K
+                                           ={E}=∗ ∃ v, ϕ' v ∗ p ⤇ active: fill_ctx (of_val v) K)%I.
+  Global Instance existential_triple_proper:
+    Proper ((⊢) --> (=) ==> pointwise_relation val (⊢) ==> (⊢)) existential_triple.
+  Proof. rewrite /existential_triple. solve_proper. Qed.
+End ExistentialTriple.
+
