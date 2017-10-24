@@ -1,7 +1,7 @@
 From iris.proofmode Require Import tactics classes.
 From iris.base_logic.lib Require Import invariants own.
 From iris.algebra Require Import updates agree big_op.
-From esop Require Import types oneshot specification corecalculus.
+From esop Require Import types oneshot specification corecalculus overlap.
 From stdpp Require Import gmap coPset.
 
 Module TypeTranslation(AxSem: AxiomaticSemantics).
@@ -23,14 +23,9 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
   
   Definition conn_map := gmap conn_name val.
   Coercion VConst: const >-> val.
-  Coercion of_gset: gset >-> coPset.
   
   Definition int_type {Σ} := val → name_map → val → iProp Σ.
   Definition int_heap {Σ} := conn_map → name_map → iProp Σ.
-
-  Definition overlap `{Countable K,Collection K C} (s: C) {A} (m m': gmap K A) :=
-    ∀ k, k ∈ s → m!!k = m'!!k.
-  Infix "≡[ s ]≡" := (overlap s) (at level 70).
 
   Record task_data :=
     TaskData {
@@ -58,7 +53,7 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
     Definition intΓ (iτ: type → int_type) (Γ: env) (D: conn_map) (N: name_map)
                (σ: gmap string val): iProp Σ :=
       ⌜∀ x: string, is_Some (Γ !! x) ↔ is_Some (σ !! x)⌝ ∧
-            ⌜∀ x: string, is_Some (Γ !! x) ↔ is_Some (D !! var x)⌝ ∧
+            ⌜∀ x: string, is_Some (Γ !! x) → is_Some (D !! var x)⌝ ∧
                           ∀ (x: string) τ v d, ⌜Γ !! x = Some τ ∧
                                                σ !! x = Some v ∧
                                                D !! var x = Some d⌝ → iτ τ d N v.
@@ -91,7 +86,7 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
       own γ (to_agree U) ∗ own (td_D_name U) (agreed D') ∗ own (td_N_name U) (agreed N').
     (** The easy parts: name map and implementation interpretation. *)
     Definition ip_impl (A: gset gname) (τ: type) (τi: @int_type Σ) (D': conn_map) N' N y :=
-      ∃ d, ⌜D' !! RET = Some d ∧ N ≡[ of_gset (names τ) ∖ of_gset A ]≡ N'⌝ ∗ τi d N' y.
+      ∃ d, ⌜D' !! RET = Some d ∧ N' ≡[ of_gset (names τ) ∖ of_gset A ]≡ N⌝ ∗ τi d N' y.
     (** The simuation triple. Note that we have a bit of trouble here: As given in the
         paper, the construction is not neccesarily well-founded. The complications with
         the different its and so on are here to allow us to build a well-founded fixpoint
@@ -159,7 +154,7 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
       intΓ iτs' (td_env U) (td_D_pre U) N' σ ∗ iηs' (td_pre U) (td_D_pre U) N'.
     Definition int_s_wait iτs' iηs' ξ A η D N :=
       ∃ t γ U N' σ,
-        ⌜N!!ξ = Some (Task t γ) ∧ td_post U = η ∧ N ≡[of_gset (names η) ∖ of_gset A]≡ N'⌝ ∧
+        ⌜N!!ξ = Some (Task t γ) ∧ td_post U = η ∧ N' ≡[of_gset (names η) ∖ of_gset A]≡ N⌝ ∧
         t ⤇ run: (subst (of_val <$> σ) (td_expr U)) ∗ int_s_wait_pre iτs' iηs' U N' σ.
   End HeapInterpretation.
 
@@ -192,7 +187,7 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
       end.
     Definition heap_depth N n η :=
       he_all_tasks (λ ξ, ∀ t γ, ⌜N !! t = Some (Task t γ)⌝ → depth N n γ) η.
-    Definition int_s_heap η: @int_heap Σ := λ D N, ∃ n, heap_depth N n η ∗ int_s_heap_rec n η D N.
+    Definition int_s_heap η: @int_heap Σ := λ D N, ∃ n, int_s_heap_rec n η D N.
 
     Fixpoint int_i_type τ: @int_type Σ :=
       match τ with
@@ -223,10 +218,10 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
     Global Instance int_i_env_persistent Γ D N σ: PersistentP (int_i_env Γ D N σ).
     Proof. apply _. Qed.
 
-    Lemma int_s_type_local τ: ∀ N N' d x (eqN: N ≡[names τ]≡ N'),
-        (int_s_type τ d N x ⊣⊢ int_s_type τ d N' x).
+    Global Instance int_s_type_local τ:
+      Proper ((=) ==> overlap (names τ) ==> (=) ==> (⊣⊢)) (int_s_type τ).
     Proof.
-      induction τ; intros; cbn; try done.
+      induction τ; intros d ? <- N N' eqN x ? <-; cbn; try done.
       - rewrite /int_s_ref /int_i_ref.
         rewrite eqN; first done.
         cbn; set_solver.
@@ -234,40 +229,189 @@ Module TypeTranslation(AxSem: AxiomaticSemantics).
         rewrite eqN; first done.
         cbn -[union]; set_solver.
     Qed.
-    Instance wait_proper t: Proper (pointwise_relation _ (≡) ==> (≡)) (@wait Σ t).
+    
+    Global Instance wait_proper t: Proper (pointwise_relation _ (≡) ==> (≡)) (@wait Σ t).
     Proof.
       intros ϕ ϕ' eqϕ.
       rewrite equiv_dist; intro.
       apply wait_nonexpansive; intro v.
       rewrite eqϕ; done.
     Qed.
-    
-    Lemma int_i_type_local τ: ∀ N N' d x (eqN: N ≡[names τ]≡ N'),
-        (int_i_type τ d N x ⊣⊢ int_i_type τ d N' x).
+
+    Global Instance int_i_type_local τ:
+      Proper ((=) ==> overlap (names τ) ==> (=) ==> (⊣⊢)) (int_i_type τ).
     Proof.
-      induction τ; intros; cbn; try done.
+      induction τ; intros d ? <- N N' eqN x ? <-; cbn; try done.
       - rewrite /int_i_ref eqN; first done.
         cbn; set_solver.
-      - rewrite /int_i_promise.
-        f_equiv; intro t.
-        f_equiv; intro γ.
-        rewrite {1}eqN; last by (cbn -[union]; set_solver).
-        do 2 f_equiv.
-        rewrite /int_i_promise_body.
-        f_equiv; intro v.
-        f_equiv; intro U.
-        f_equiv; intro D'.
-        f_equiv; intro N''.
-        do 2 f_equiv.
-        rewrite /ip_impl.
-        f_equiv; intro d'.
-        do 3 f_equiv.
-        rewrite /overlap.
-        cbn -[union] in eqN.
+      - rewrite /int_i_promise /int_i_promise_body /ip_impl.
+        rewrite (eqN ξ); last set_solver.
+        do 21 f_equiv.
+        apply (overlap_iff (of_gset (names (ttask ξ A τ)))).
+        + cbn -[union]; intro.
+          rewrite elem_of_difference !elem_of_of_gset.
+          set_solver.
+        + intro; rewrite elem_of_of_gset; auto.
     Qed.
 
-    
-  End Interpretations.
+    Definition names_heap (η: types.heap): gset conn_name := of_list (name <$> (elements (names η))).
+    Lemma elem_of_names_heap (d: conn_name) η:
+      (d ∈ names_heap η ↔ ∃ ξ: gname, d = name ξ ∧ ξ ∈ names η)%type.
+    Proof.
+      rewrite /names_heap elem_of_of_list elem_of_list_fmap.
+      f_equiv; intro ξ. by rewrite elem_of_elements.
+    Qed.
 
-  (** Basic properties *)
-  Global Instance 
+    Lemma names_heap_star η η': (names_heap (η ⊗ η') ≡ names_heap η ∪ names_heap η')%C.
+    Proof.
+      rewrite /names_heap => ξ.
+      rewrite elem_of_union !elem_of_of_list !elem_of_list_fmap /=.
+      setoid_rewrite elem_of_elements.
+      change (names (hstar η η')) with (names η ∪ names η').
+      setoid_rewrite elem_of_union.
+      split.
+      - intros [? [? [?|?]]]; eauto.
+      - intros [[? [??]]|[? [??]]]; eauto.
+    Qed.
+    
+    Lemma int_s_heap_approx_local
+          iη (iη_proper: ∀ (η: types.heap),
+                 Proper (overlap (names_heap η) ==> overlap (names η) ==> (⊣⊢)) (iη η)) η:
+      Proper (overlap (names_heap η) ==> overlap (names η) ==> (⊣⊢)) (int_s_heap_approx iη η).
+    Proof.
+      induction η; intros D D' eqD N N' eqN; cbn.
+      - done.
+      - rewrite /int_s_star /int_i_star.
+        f_equiv; [apply IHη1|apply IHη2].
+        all: eapply overlap_mono; eauto.
+        all: cbn.
+        1,3: rewrite names_heap_star.
+        all: clear; set_solver.
+      - rewrite /int_s_pt.
+        setoid_rewrite (eqN ξ); last by set_solver.
+        rewrite eqD; cycle 1.
+        { rewrite /names_heap elem_of_of_list elem_of_list_fmap.
+          exists ξ; split; auto.
+          rewrite elem_of_elements; set_solver. }
+        enough (∀ d v, int_s_type τ d N v ⊣⊢ int_s_type τ d N' v) as eqint.
+        { by setoid_rewrite eqint. }
+        intros; apply int_s_type_local; auto.
+        eapply overlap_mono; eauto.
+        set_solver.
+      - rewrite /int_s_wait /=.
+        do 10 f_equiv.
+        rewrite (eqN ξ); last set_solver.
+        do 4 f_equiv.
+        apply (overlap_iff (of_gset (names (hwait ξ A η)))); eauto.
+        + intro ξ'.
+          rewrite elem_of_difference !elem_of_of_gset.
+          set_solver.
+        + intros ξ'; rewrite elem_of_of_gset; auto.
+    Qed.
+
+    Lemma int_s_heap_rec_local n: ∀ η,
+      Proper (overlap (names_heap η) ==> overlap (names η) ==> (⊣⊢)) (int_s_heap_rec n η).
+    Proof.
+      induction n as [|n IH]; intros; cbn; apply int_s_heap_approx_local; auto.
+      solve_proper.
+    Qed.
+
+    Lemma int_s_heap_local η:
+      Proper (overlap (names_heap η) ==> overlap (names η) ==> (⊣⊢)) (int_s_heap η).
+    Proof.
+      intros D D' eqD N N' eqN.
+      rewrite /int_s_heap.
+      f_equiv; intro n.
+      apply int_s_heap_rec_local; done.
+    Qed.
+    
+    Lemma int_i_heap_local η:
+      Proper (overlap (names_heap η) ==> overlap (names η) ==> (⊣⊢)) (int_i_heap η).
+    Proof.
+      induction η; intros D D' eqD N N' eqN; cbn.
+      - done.
+      - rewrite /int_s_star /int_i_star.
+        f_equiv; [apply IHη1|apply IHη2].
+        all: eapply overlap_mono; eauto.
+        all: cbn.
+        1,3: rewrite names_heap_star.
+        all: clear; set_solver.
+      - rewrite /int_i_pt.
+        rewrite (eqN ξ); last set_solver.
+        rewrite (eqD (name ξ)).
+        2: rewrite /names_heap elem_of_of_list elem_of_list_fmap.
+        2: eexists; split; eauto.
+        2: rewrite elem_of_elements; set_solver.
+        assert (N ≡[ names τ ]≡ N') as eqN'.
+        { intros ξ' inξ; apply eqN; set_solver. }
+        enough (∀ d v, int_i_type τ d N v ⊣⊢ int_i_type τ d N' v) as eqτ.
+        { by setoid_rewrite eqτ. }
+        intros; by apply int_i_type_local.
+      - rewrite /int_i_wait /int_i_wait_body.
+        rewrite (eqN ξ); last set_solver.
+        enough (∀ N'', N ≡[ of_gset (names η) ∖ of_gset A ]≡ N'' ↔
+                         N' ≡[ of_gset (names η) ∖ of_gset A ]≡ N'')
+          as eqN'.
+        { by setoid_rewrite eqN'. }
+        intros.
+        enough (N''≡[ of_gset (names η) ∖ of_gset A ]≡ N ↔
+                   N'' ≡[ of_gset (names η) ∖ of_gset A ]≡ N')
+          as ov.
+        { split; intros eqN' ξ' inξ'; symmetry; apply ov; eauto; done. }
+        apply (overlap_iff (of_gset (names (hwait ξ A η)))).
+        + intro; rewrite elem_of_difference !elem_of_of_gset; set_solver.
+        + intros ?; rewrite elem_of_of_gset; auto.
+    Qed.
+
+    Definition env_names (Γ: env): gset conn_name := of_list (var <$> fst <$> map_to_list Γ).
+    Lemma intΓ_local (ϕ: type → @int_type Σ)
+          (ϕ_local: ∀ τ, Proper ((=) ==> overlap (names τ) ==> (=) ==> (⊣⊢)) (ϕ τ)) Γ:
+      Proper (overlap (env_names Γ) ==> overlap (names Γ) ==> (=) ==> (⊣⊢)) (intΓ ϕ Γ).
+    Proof.
+      intros D D' eqD N N' eqN σ ? <-.
+      rewrite /intΓ.
+      f_equiv.
+      assert (∀ (x: string), is_Some (Γ !! x) → (is_Some (D!!var x) ↔ is_Some (D'!!var x)))
+        as eqD'.
+      { intros x [τ mtx].
+        rewrite eqD; first done.
+        rewrite /env_names elem_of_of_list -list_fmap_compose elem_of_list_fmap.
+        exists (x,τ); split; auto.
+        rewrite elem_of_map_to_list; done. }
+      f_equiv.
+      { f_equiv.
+        apply forall_proper; intro.
+        specialize (eqD' x); tauto. }
+      f_equiv; intro x.
+      f_equiv; intro τ.
+      f_equiv; intro v.
+      f_equiv; intro d.
+      destruct (Γ!!x) as [τ'|] eqn:mtx.
+      2: iSplit; iIntros "pre"; iIntros ([[=]?]).
+      rewrite (eqD (var x)); cycle 1.
+      { rewrite /env_names elem_of_of_list -list_fmap_compose elem_of_list_fmap.
+        exists (x,τ'); split; auto; rewrite elem_of_map_to_list; done. }
+      assert ({τ' = τ} + {τ' ≠ τ}) as [->|neq].
+      { decide equality.
+        1, 3: apply (decide (ξ = ξ0)).
+        apply (decide (A = A0)). }
+      2: iSplit; iIntros "pre"; iIntros ([??]); congruence.
+      f_equiv.
+      apply ϕ_local; auto.
+      eapply (overlap_mono (names Γ)); eauto.
+      intros ξ inξ.
+      rewrite /names /Names_instance_2.
+      clear eqD eqN eqD'.
+      induction Γ using map_ind.
+      { rewrite lookup_empty in mtx; done. }
+      destruct (decide (i=x)) as [->|neq].
+      + rewrite big_opM_insert; last done.
+        rewrite lookup_insert in mtx.
+        injection mtx as ->.
+        set_solver.
+      + rewrite big_opM_insert; last done.
+        rewrite lookup_insert_ne in mtx; last done.
+        set_solver.
+    Qed.
+  End Interpretations.
+End TypeTranslation.
