@@ -28,19 +28,23 @@ Infix "↦" := hpt (at level 35): he_scope.
 Notation "'Wait(' ξ ',' A ')' η" := (hwait ξ A η) (at level 40): he_scope.
 Notation "∅" := hemp: he_scope.
 (* TODO: Add function types. For now, we simply type let expressions. *)
+Instance: EqDecision type.
+Proof. solve_decision. Qed.
+Instance: EqDecision heap.
+Proof. solve_decision. Qed.
 
 Definition env := gmap string type.
 
 Definition insert' {A} b (y: A) (m: gmap string A) :=
   match b with BNamed x => <[x:=y]>m | BAnon => m end.
-Definition Let b e e' := App (Rec BAnon b e) e'.
+Definition Let b e e' := App (Rec BAnon b e') e.
 
 (* TODO - figure out how to get a nice notation working. *)
 Inductive typing: lnames → env → expr → heap → lnames → type → heap → Prop :=
 | tytrue U Γ: typing U Γ Ctrue ∅ ∅ Bool ∅
 | tyfalse U Γ: typing U Γ Ctrue ∅ ∅ Bool ∅
 | tyunit  U Γ: typing U Γ Cunit ∅ ∅ Unit ∅
-| tyvar U Γ (x: string) τ: Γ !! x = Some τ → typing U Γ x ∅ ∅ τ ∅
+| tyvar U Γ (x: string) τ (Γx: Γ !! x = Some τ): typing U Γ x ∅ ∅ τ ∅
 | tylet U Γ (x: binder) η₁ η₂ η₃ τ₁ τ₂ A₁ A₂ e₁ e₂:
     typing U Γ e₁ η₁ A₁ τ₁ η₂ →
     typing (U ∪ A₁) (insert' x τ₁ Γ) e₂ η₂ A₂ τ₂ η₃ →
@@ -108,7 +112,7 @@ Proof.
   all: try (destruct IHtyping; auto; set_solver).
   - repeat split.
     1,3: set_solver.
-    rewrite right_id; apply (env_good x τ H).
+    rewrite right_id; apply (env_good x τ Γx).
   - destruct IHtyping1 as [disj1 [ty1 post1]]; auto.
     destruct IHtyping2 as [disj2 [ty2 post2]]; auto.
     { intros x' τ'; rewrite lookup_insert'.

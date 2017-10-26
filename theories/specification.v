@@ -140,6 +140,8 @@ Module Type AxiomaticSemantics.
            (at level 20, e, Q at level 200,
             format "'[' 'WP'  e  '/' {{  v ,  Q  } } ']'") : uPred_scope.
 
+  Parameter wait: ∀ `{axiomaticIrisG Σ}, tid → (val → iProp Σ) → iProp Σ.
+
   Section InIris.
     Context `{axiomaticIrisG Σ, inG Σ heapUR} (heap_name task_buffer_name: gname).
     Local Open Scope I.
@@ -164,21 +166,24 @@ Module Type AxiomaticSemantics.
         l ↦ᵢ - ⊢ WP Write (Cloc l) e @ E {{ x, ⌜x = VConst Cunit⌝ ∗ l ↦ᵢ v }}.
 
     (** Axiomatization of wait permissions. *)
-    Parameter wait: tid → (val → iProp Σ) → iProp Σ.
     Parameter waitN: namespace.
     Declare Instance wait_nonexpansive t n:
       Proper (pointwise_relation _ (dist n) ==> dist n) (wait t).
     Axiom wait_split: ∀ t ϕ₁ ϕ₂,
         wait t (λ v, ϕ₁ v ∗ ϕ₂ v) ={↑waitN}=∗ wait t ϕ₁ ∗ wait t ϕ₂.
+    Axiom wait_split_later: ∀ t ϕ₁ ϕ₂,
+        ▷wait t (λ v, ϕ₁ v ∗ ϕ₂ v) ={↑waitN}=∗ ▷wait t ϕ₁ ∗ ▷wait t ϕ₂.
     Axiom wait_combine: ∀ t ϕ₁ ϕ₂,
         wait t ϕ₁ ∗ wait t ϕ₂ ={↑waitN}=∗ wait t (λ v, ϕ₁ v ∗ ϕ₂ v).
+    Axiom wait_combine_later: ∀ t ϕ₁ ϕ₂,
+        ▷wait t ϕ₁ ∗ ▷wait t ϕ₂ ={↑waitN}=∗ ▷wait t (λ v, ϕ₁ v ∗ ϕ₂ v).
 
     (** Task operations *)
     Axiom wp_post: ∀ E e ϕ,
         WP e {{ ϕ }} ⊢
         WP Post e @ E {{ v, ∃ t, ⌜v = VConst (Ctid t)⌝ ∗ wait t ϕ }}.
     Axiom wp_wait: ∀ E t ϕ,
-        wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ϕ v }}.
+        ▷wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ϕ v }}.
     
     (** Meta-theory and bind rule; this duplicates parts of [program_logic/weakestpre],
         namely everything that requires unfolding. The rest can be shown from these axioms. *)
@@ -208,11 +213,11 @@ Module Type AxiomaticSemantics.
       E' ⊆ E →
       (|={E,E'}▷=> P) -∗ WP e @ E' {{ v, P ={E}=∗ ϕ v }} -∗ WP e @ E {{ ϕ }}.
     Axiom wp_bind_item: ∀ K E e ϕ,
-        WP e @ E {{ v, WP (fill_ectx_item (of_val v) K) @ E {{ ϕ }} }} ⊢
-        WP (fill_ectx_item e K) @ E {{ ϕ }}.
+        WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }} ⊢
+        WP (fill_ctx_item e K) @ E {{ ϕ }}.
     Axiom wp_bind_item_inv: ∀ K E e ϕ,
-        WP (fill_ectx_item e K) @ E {{ ϕ }} ⊢
-        WP e @ E {{ v, WP (fill_ectx_item (of_val v) K) @ E {{ ϕ }} }}.
+        WP (fill_ctx_item e K) @ E {{ ϕ }} ⊢
+        WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }}.
 
     (** This duplicates results from [program_logic/adequacy]. *)
     Axiom wp_adequate: ∀ h e ϕ,
@@ -625,8 +630,9 @@ End Simulation.
 Section ExistentialTriple.
   Context `{specStateG Σ, invG Σ, inG Σ heapR} (E: coPset) (c: cfg).
   Definition existential_triple (ϕ: iProp Σ) e (ϕ': val → iProp Σ): iProp Σ :=
-    (∀ p K, spec_ctx c -∗ ϕ -∗ p ⤇ active: fill_ctx e K
-                                           ={E}=∗ ∃ v, ϕ' v ∗ p ⤇ active: fill_ctx (of_val v) K)%I.
+    (∀ p K,
+        spec_ctx c -∗ ϕ -∗ p ⤇ active: fill_ctx e K
+                                       ={E}=∗ ∃ v, ϕ' v ∗ p ⤇ active: fill_ctx (of_val v) K)%I.
   Global Instance existential_triple_proper:
     Proper ((⊢) --> (=) ==> pointwise_relation val (⊢) ==> (⊢)) existential_triple.
   Proof. rewrite /existential_triple. solve_proper. Qed.

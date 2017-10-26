@@ -66,6 +66,7 @@ Defined.
 Variant val :=
 | VConst (c: const)
 | VRec (f x: binder) (e: expr) {e_closed: Closed (add' f (add' x ∅)) e}.
+Coercion VConst: const >-> val.
                                                                
 Variant ctx_item :=
 | CAppL (e': expr)
@@ -151,7 +152,187 @@ Fixpoint subst σ e :=
   end.
 Definition subst' b e e' :=
   match b with BAnon => e' | BNamed x => subst (<[x:=e]>∅) e' end.
-                                               
+
+Definition subst_ctx_item σ i :=
+  match i with
+  | CAppL e' => CAppL (subst σ e')
+  | CAppR v => CAppR v
+  | CIf e' e'' => CIf (subst σ e') (subst σ e'')
+  | CAlloc => CAlloc
+  | CRead => CRead
+  | CWriteL e' => CWriteL (subst σ e')
+  | CWriteR v => CWriteR v
+  | CWait => CWait
+  end.
+Definition subst_ctx σ (K: list ctx_item) := subst_ctx_item σ <$> K.
+
+Local Opaque union.
+Lemma elem_of_add' x b X: x ∈ add' b X ↔ BNamed x = b ∨ x ∈ X.
+Proof.
+  destruct b; rewrite /= ?elem_of_union ?elem_of_singleton; intuition congruence.
+Qed.
+Lemma lookup_delete' {A} b (v: A) m x: delete' b m !! x = Some v ↔ BNamed x ≠ b ∧ m !! x = Some v.
+Proof.
+  destruct b as [|y]; rewrite /=.
+  - intuition congruence.
+  - destruct (decide (x=y)) as [<-|neq].
+    + rewrite lookup_delete; intuition congruence.
+    + rewrite lookup_delete_ne; intuition congruence.
+Qed.
+Lemma lookup_delete'_None {A} b (m: gmap string A) x:
+  delete' b m !! x = None ↔ BNamed x = b ∨ m!!x = None.
+Proof.
+  destruct b as [|y]; cbn.
+  - intuition discriminate.
+  - destruct (decide (x=y)) as [<-|neq].
+    + rewrite lookup_delete; tauto.
+    + rewrite lookup_delete_ne; intuition congruence.
+Qed.
+
+Instance: EqDecision binder.
+Proof. solve_decision. Qed.
+
+Lemma lookup_delete'_cases {A} b x (m: gmap string A):
+  delete' b m !! x = if bool_decide (BNamed x ≠ b) then m!!x else None.
+Proof.
+  destruct (bool_decide_reflect (BNamed x ≠ b)) as [case|case].
+  - apply option_eq; intro v.
+    rewrite lookup_delete'; tauto.
+  - apply lookup_delete'_None.
+    left; by apply dec_stable.
+Qed.
+
+Lemma subst_closed X e: Closed X e → ∀ σ (disj: ∀ x, x ∈ X → σ !! x = None), subst σ e = e.
+Proof.
+  induction 1; intros.
+  all: rewrite /= ?IHClosed ?IHClosed1 ?IHClosed2 ?IHClosed3; auto.
+  - rewrite disj //.
+  - intros y.
+    rewrite !elem_of_add' !lookup_delete'_None.
+    intuition.
+Qed.
+
+Lemma subst_closed_empty e σ: Closed ∅ e → subst σ e = e.
+Proof.
+  intro; apply (subst_closed ∅); auto.
+  set_solver.
+Qed.
+
+Lemma val_closed v: Closed ∅ (of_val v).
+Proof. by destruct v; constructor. Qed.
+
+Corollary subst_val v σ: subst σ (of_val v) = of_val v.
+Proof. apply subst_closed_empty, val_closed. Qed.
+
+Lemma subst_fill σ K e: subst σ (fill_ctx e K) = fill_ctx (subst σ e) (subst_ctx σ K).
+Proof.
+  revert e; unfold subst_ctx.
+  induction K as [|I K IH]; cbn; intros; first done.
+  rewrite IH; f_equal.
+  destruct I; try done.
+  all: rewrite /= subst_val //.
+Qed.
+
+Hint Constructors Closed.
+Lemma closed_mono: Proper ((⊆) ==> (=) ==> impl) Closed.
+Proof.
+  intros X X' sub e ? <- closed; revert X' sub.
+  induction closed; eauto.
+  intros; constructor.
+  apply IHclosed.
+  intro; rewrite !elem_of_add'.
+  intuition.
+Qed.
+
+Lemma closed_subst X e: Closed X e → ∀ σ (closed: ∀ x e, x ∈ X → σ !! x = Some e →
+                                                         Closed X e),
+      Closed X (subst σ e).
+Proof.
+  induction 1; cbn; eauto; intros.
+  - destruct (σ!!x) as [e|] eqn:mt.
+    + by apply (closed x).
+    + by constructor.
+  - constructor.
+    apply IHClosed.
+    intros x' e'.
+    rewrite !elem_of_add' !lookup_delete'.
+    intros [?|[?|inx']].
+    1,2: tauto.
+    intros [_ [_ mt]].
+    generalize (closed x' e' inx' mt).
+    apply closed_mono; auto.
+    intro; rewrite !elem_of_add'; auto.
+Qed.
+
+Lemma closed_subst_val X e σ: Closed X e → Closed X (subst (of_val <$> σ) e).
+Proof.
+  intro closed.
+  apply closed_subst; auto.
+  intros x e' inx.
+  rewrite lookup_fmap fmap_Some.
+  intros [v [_ ->]].
+  eapply closed_mono.
+  - apply empty_subseteq.
+  - done.
+  - apply val_closed.
+Qed.
+
+Definition subst_merge' σ e e' :=
+  match e' with
+  | Some e' => Some (subst σ e')
+  | None => e
+  end.
+Instance: ∀ σ, DiagNone (subst_merge' σ).
+Proof. done. Qed.
+
+Definition subst_merge σ σ' := merge (subst_merge' σ) σ σ'.
+
+Lemma subst_subst σ σ' e:
+  (∀ x e, σ' !! x = Some e → Closed ∅ e) →
+  subst σ (subst σ' e) = subst (subst_merge σ σ') e.
+Proof.
+  revert σ σ'.
+  induction e; intros ?? good_subst; cbn.
+  all: rewrite ?IHe ?IHe1 ?IHe2 ?IHe3; auto.
+  { rewrite /subst_merge lookup_merge.
+    destruct (σ' !! x) as [e'|] eqn:subst'; done. }
+  { apply f_equal, (f_equal (λ σ, subst σ e)), map_eq; intro y.
+    apply option_eq; intro e'.
+    rewrite /subst_merge lookup_merge /subst_merge' !lookup_delete' lookup_merge
+            lookup_delete'_cases.
+    destruct (bool_decide_reflect (BNamed y ≠ f)) as [neqy|<-%dec_stable]; cycle 1.
+    { rewrite lookup_delete; intuition congruence. }
+    rewrite lookup_delete'_cases.
+    destruct (bool_decide_reflect (BNamed y ≠ x)) as [neqx|<-%dec_stable]; cycle 1.
+    { rewrite lookup_delete' lookup_delete; intuition congruence. }
+    destruct (σ' !! y) as [e''|] eqn:mty.
+    + rewrite !subst_closed_empty; eauto; tauto.
+    + by rewrite !lookup_delete'. }
+  { intros x' e'.
+    rewrite !lookup_delete'; intuition eauto. }
+Qed.
+
+Lemma subst_insert_r σ x e e' (e_closed: Closed ∅ e):
+  subst (<[x:=e]>σ) e' =
+  subst σ (subst (<[x:=e]>∅) e').
+Proof.
+  rewrite subst_subst.
+  { apply (f_equal (λ σ, subst σ e')), map_eq; intro y.
+    rewrite /subst_merge lookup_merge.
+    destruct (decide (x=y)) as [<-|neq].
+    - by rewrite !lookup_insert /= subst_closed_empty.
+    - by rewrite !lookup_insert_ne ?lookup_empty /=. }
+  intros x' e''.
+  rewrite lookup_insert_Some lookup_empty.
+  intuition congruence.
+Qed.
+
+Lemma fill_ctx_app K K' e: fill_ctx (fill_ctx e K) K' = fill_ctx e (K++K').
+Proof. by rewrite /fill_ctx foldl_app. Qed.
+Lemma fill_ectx_app K K' e: fill_ectx (fill_ectx e K) K' = fill_ectx e (K++K').
+Proof. by rewrite /fill_ectx foldl_app. Qed.
+
+
 Definition heap := gmap loc val.
 Variant task_state := running (e: expr) | done (v: val).
 Definition task_buffer := gmap tid task_state.
