@@ -15,16 +15,23 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Typeclasses Transparent axiomaticIrisG.
     Local Open Scope I.
 
-    Definition simulation := simulation_body int_s_type int_s_heap.
+    Definition simulation Γ e η A τ η' D M D' M': iProp Σ :=
+      ∀ N σ, existential_triple ⊤ initial_cfg
+                                (int_s_env Γ D M N σ ∗ int_s_heap η D M N)
+                                (subst (of_val <$> σ) e)
+                                (λ v, ∃ d N',
+                                    ⌜M ≡[not_new A]≡ M' ∧ N ≡[not_new A]≡ N' ∧ D' !! RET = Some d⌝ ∧
+                                    int_s_type τ d M' N' v ∗ int_s_heap η' D' M' N').
     
     Definition delayed_typed Γ η e e' A τ η' :=
-      ∀ D N σ,
-        (int_i_env Γ D N σ ∗ int_i_heap η D N)
+      ∀ D M N σ,
+        (int_i_env Γ D M N σ ∗ int_i_heap η D M N)
           -∗ WP subst (of_val <$> σ) e
-          {{ xᵢ, ∃ Nᵢ' D' d', ⌜N ≡[ not_new A ]≡ Nᵢ' ∧ D' !! RET = Some d'⌝ ∗
-                             int_i_type τ d' Nᵢ' xᵢ ∗
-                             int_i_heap η' D' Nᵢ' ∗
-                             □simulation Γ e' η A τ η' D D' }}.
+          {{ xᵢ, ∃ Nᵢ' M' D' d', ⌜N ≡[ not_new A ]≡ Nᵢ' ∧ M ≡[ not_new A ]≡ M' ∧
+                                 D' !! RET = Some d'⌝ ∗
+                             int_i_type τ d' M' Nᵢ'  xᵢ ∗
+                             int_i_heap η' D' M' Nᵢ' ∗
+                             □simulation Γ e' η A τ η' D M D' M' }}.
     Record delayed_simulation U Γ (η: heap) e e' A (τ: type) (η': heap) :=
       Delayed {
           ds_used_names: names Γ ∪ names η ⊆ U;
@@ -37,34 +44,31 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Definition strengthen Γ x (d: val) (D D': conn_map) := <[var x:=d]>(D ~[names_env Γ]~> D').
     
     Lemma strengthen_env_generic
-          (int_ty: type → @int_type Σ) ϕ
-          (Γ: env) (τ: type) x D D' v d (σ: gmap string val) N N'
+          (int_ty: type → @int_type Σ) (ϕ: conn_map → task_map → name_map → iProp Σ)
+          (Γ: env) (τ: type) x (D D': conn_map) v d (σ: gmap string val) (M M': task_map)
+          (N N': name_map)
           (L: gset conn_name) (disj: names_env Γ ⊥ L) (notin: var x ∉ L) O (Osub: names Γ ⊆ O)
-          (ϕ_local: Proper (overlap L ==> (⊣⊢)) (ϕ N'))
-          (int_local: ∀ τ, Proper (eq ==> overlap (names τ) ==> eq ==> (⊣⊢)) (int_ty τ)):
-      intΓ int_ty Γ D N σ -∗ (⌜N ≡[O]≡ N'⌝ ∗ int_ty τ d N' v ∗ ϕ N' D') -∗
+          (ϕ_local: Proper (overlap L ==> eq ==> eq ==> (⊣⊢)) ϕ)
+          (int_local: ∀ τ, Proper (eq ==> overlap (names τ) ==> overlap (names τ) ==> eq ==> (⊣⊢))
+                                  (int_ty τ)):
+      intΓ int_ty Γ D M N σ -∗ (⌜N ≡[O]≡ N' ∧ M ≡[O]≡ M'⌝ ∗ int_ty τ d M' N' v ∗ ϕ D' M' N') -∗
            let D'' := strengthen Γ x d D D' in
-           intΓ int_ty (<[x:=τ]>Γ) D'' N' (<[x:=v]>σ) ∗ ϕ N' D''.
+           intΓ int_ty (<[x:=τ]>Γ) D'' M' N' (<[x:=v]>σ) ∗ ϕ D'' M' N'.
     Proof.
       iIntros "intΓ [eqN [intτ ϕ]]".
-      iDestruct "eqN" as %eqN; cbn.
+      iDestruct "eqN" as %[eqM eqN]; cbn.
       iSplitR "ϕ".
       { iDestruct "intΓ" as "[dom intΓ]".
         iDestruct "dom" as %[domσ domD].
         iSplit.
         { iPureIntro; split.
+          { intros y; by rewrite !lookup_insert_is_Some domσ. }
           { intros y.
-            destruct (decide (x=y)) as [<-|neq].
-            - rewrite !lookup_insert; split; eauto.
-            - rewrite !lookup_insert_ne; eauto. }
-          { intros y.
-            destruct (decide (x=y)) as [<-|neq].
-            { rewrite !lookup_insert; eauto. }
-            rewrite !lookup_insert_ne. 2,3: congruence.
-            intros indom.
-            rewrite lookup_merge_along_in; first eauto.
-            rewrite elem_of_names_env.
-            exists y; eauto. }
+            rewrite /strengthen !lookup_insert_is_Some.
+            intros [<-|[neqxy iny]]; first auto.
+            right; split; first congruence.
+            rewrite lookup_merge_along_in; first auto.
+            rewrite elem_of_names_env; exists y; auto. }
         }
         iIntros (x' τ' v' d' [lookupτ [lookupv lookupd]]).
         destruct (decide (x=x')) as [<-|neq].
@@ -76,18 +80,18 @@ Module Delayed(AxSem: AxiomaticSemantics).
           rewrite lookup_insert_ne in lookupτ; last done.
           rewrite lookup_insert_ne in lookupd; last congruence.
           rewrite lookup_insert_ne in lookupv; last done.
-          rewrite (int_local τ' d' d' eq_refl N' N); last done.
-          - iApply ("intΓ" $! x' τ' v' d').
-            iPureIntro; intuition.
+          iSpecialize ("intΓ" $! x' τ' v' d' with "[]").
+          { iPureIntro; repeat split; auto.
             rewrite lookup_merge_along_in in lookupd; auto.
-            rewrite elem_of_names_env; eauto.
-          - symmetry.
-            eapply overlap_mono.
-            2,3,4: done.
-            trans (names Γ); auto.
-            intros ξ.
-            rewrite env_elem_of_names.
-            exists x', τ'; eauto. }
+            rewrite elem_of_names_env.
+            exists x'; split; eauto. }
+          assert (names τ' ⊆ O).
+          { etrans; last done.
+            intros ξ inξ.
+            rewrite env_elem_of_names; eauto. }
+          iApply (int_local with "intΓ").
+          1,4: done.
+          all: eapply overlap_mono; eauto; done. }
       }
       enough (overlap L D' (<[var x:=d]>(D ~[names_env Γ]~> D'))) as ov.
       { by rewrite /strengthen -ov. }
@@ -95,6 +99,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       rewrite lookup_insert_ne.
       2: by intros <-.
       rewrite lookup_merge_along_not_in; first done.
+      clear -disj inn.
       set_solver.
     Qed.
 
@@ -111,23 +116,26 @@ Module Delayed(AxSem: AxiomaticSemantics).
       N ≡[not_new (A ∪ A')]≡ N''.
     Proof.
       intros ov1 ov2.
-      pose proof (good_overlap A A').
+      pose proof (good_overlap A A') as ov.
       etrans.
       all: eapply overlap_mono.
       2,3,6,7: done.
       2,4: eassumption.
+      all: clear -ov.
       all: set_solver.
     Qed.
 
     Local Open Scope I.
-    Context `{∀ t, Proper (pointwise_relation _ (⊣⊢) ==> (⊣⊢)) (wait t)}.
+    Context {wait_Proper: ∀ t, Proper (pointwise_relation _ (⊣⊢) ==> (⊣⊢)) (wait t)}.
     
-    Lemma existential_part (x: string) e K Γ τ₁ τ₂ η₁ η₂ η₃ A₁ A₂ (D₁ D₂ D₃: conn_map) d
+    Lemma existential_part (x: string) e K Γ τ₁ τ₂ η₁ η₂ η₃ A₁ A₂ (D₁ D₂ D₃: conn_map)
+          (M₁ M₂ M₃: task_map) d
           (d_good: D₂!!RET = Some d) (Γ_names_good: names Γ ⊥ A₁)
           (x_fresh: ∀ e', subst_ctx (<[x:=e']>∅) K = K):
-      simulation Γ e η₁ A₁ τ₁ η₂ D₁ D₂
-                 -∗ simulation (<[x:=τ₁]>Γ) (fill_ctx x K) η₂ A₂ τ₂ η₃ (strengthen Γ x d D₁ D₂) D₃
-                 -∗ simulation Γ (fill_ctx e K) η₁ (A₁ ∪ A₂) τ₂ η₃ D₁ D₃.
+      simulation Γ e η₁ A₁ τ₁ η₂ D₁ M₁ D₂ M₂
+                 -∗ simulation (<[x:=τ₁]>Γ) (fill_ctx x K) η₂ A₂ τ₂ η₃
+                 (strengthen Γ x d D₁ D₂) M₂ D₃ M₃
+                 -∗ simulation Γ (fill_ctx e K) η₁ (A₁ ∪ A₂) τ₂ η₃ D₁ M₁ D₃ M₃.
     Proof.
       iIntros "sime simK".
       iIntros (N σ p K') "#ctx [#Γ pre] step".
@@ -135,10 +143,10 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iMod ("sime" $! N σ p (subst_ctx (of_val <$> σ) K++K')
               with "ctx [$Γ $pre] step") as (v₁) "[post step]".
       iDestruct "post" as (d' N') "[props [ty pre]]".
-      iDestruct "props" as %[eqN eqd].
+      iDestruct "props" as %[eqM [eqN eqd]].
       replace d' with d in * by congruence.
-      iPoseProof (strengthen_env_generic int_s_type (λ N D, int_s_heap η₂ D N) Γ τ₁ x D₁ D₂
-                                         v₁ d σ N N' (names_heap η₂))
+      iPoseProof (strengthen_env_generic int_s_type (int_s_heap η₂) Γ τ₁ x D₁ D₂
+                                         v₁ d σ M₁ M₂ N N' (names_heap η₂))
         as "str".
       { intro n.
         rewrite elem_of_names_env.
@@ -147,16 +155,18 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { rewrite /names_heap elem_of_of_list elem_of_list_fmap.
         intros [? [[=] _]]. }
       { done. }
-      { intros D D' eqD. by apply int_s_heap_local. }
+      { intros D D' eqD ?? <- ?? <-; by apply int_s_heap_local. }
       { apply int_s_type_local. }
       iDestruct ("str" with "Γ [$ty $pre]") as "[Γ' pre]".
       { iPureIntro.
-        apply overlap_cast.
-        eapply overlap_mono.
-        2-4: done.
-        intro ξ.
-        rewrite elem_of_of_gset /not_new elem_of_difference elem_of_of_gset.
-        set_solver. }
+        assert (of_gset (names Γ) ⊆ not_new A₁).
+        { intro ξ; rewrite elem_of_of_gset /not_new elem_of_difference elem_of_of_gset.
+          clear -Γ_names_good; set_solver. }
+        split.
+        all: apply overlap_cast.
+        all: eapply overlap_mono.
+        all: done.
+      }
       rewrite -fill_ctx_app -(subst_val v₁ (of_val <$> σ)) -subst_fill.
       iMod ("simK" $! N' (<[x := v₁]>σ) p K' with "ctx [$Γ' $pre] [step]")
         as (v₂) "[post step]".
@@ -166,9 +176,9 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iModIntro.
       iExists v₂; iFrame.
       iExists d'', N''; iFrame.
-      iDestruct "eqs" as %[eqN' eqd'].
-      iPureIntro; split; auto.
-      eapply overlap_trans; eauto.
+      iDestruct "eqs" as %[eqM' [eqN' eqd']].
+      iPureIntro; repeat split; auto.
+      all: eapply overlap_trans; eauto.
     Qed.
 
     Lemma wp_bind_inv K E e ϕ:
@@ -213,23 +223,23 @@ Module Delayed(AxSem: AxiomaticSemantics).
                     -∗ delayed_typed Γ η₁ (fill_ctx e K) (fill_ctx e' K') (A₁ ∪ A₂) τ₂ η₃.
     Proof.
       iIntros "dele delK".
-      iIntros (D Ni σi) "[#intΓ intη]".
+      iIntros (D M Ni σi) "[#intΓ intη]".
       rewrite subst_fill.
       iApply wp_bind.
-      iSpecialize ("dele" $! D Ni σi with "[$intΓ $intη]").
+      iSpecialize ("dele" $! D M Ni σi with "[$intΓ $intη]").
       iApply (wp_wand with "dele [-]").
       iIntros (v) "post".
-      iDestruct "post" as (Ni' D' d') "[rel [intτ [intη' #sim]]]".
+      iDestruct "post" as (Ni' M' D' d') "[rel [intτ [intη' #sim]]]".
       replace (fill_ctx (of_val v) (subst_ctx (of_val <$> σi) K))
         with (subst (of_val <$> (<[x:=v]>σi)) (fill_ctx x K)); cycle 1.
       { rewrite fmap_insert subst_insert_r; auto using val_closed.
         rewrite subst_fill /= lookup_insert x_fresh -(subst_val _ (of_val <$> σi)) -subst_fill.
         rewrite subst_val //. }
-      iDestruct "rel" as %[eqN eqd].
-      iSpecialize ("delK" $! (strengthen Γ x d' D D') Ni' (<[x:=v]>σi) with "[intτ intη']").
+      iDestruct "rel" as %[eqN [eqM eqd]].
+      iSpecialize ("delK" $! (strengthen Γ x d' D D') M' Ni' (<[x:=v]>σi) with "[intτ intη']").
       { iApply (strengthen_env_generic
-                  int_i_type (λ N D, int_i_heap η₂ D N)
-                  Γ τ₁ x D D' v d' σi Ni Ni' (names_heap η₂)
+                  int_i_type (int_i_heap η₂)
+                  Γ τ₁ x D D' v d' σi M M' Ni Ni' (names_heap η₂)
                   with "intΓ [intτ intη']").
         - intro n.
           rewrite /names_env /names_heap !elem_of_of_list !elem_of_list_fmap.
@@ -237,26 +247,23 @@ Module Delayed(AxSem: AxiomaticSemantics).
         - rewrite /names_heap elem_of_of_list elem_of_list_fmap.
           intros [? [[=] _]].
         - done.
-        - intros D₁ D₂ eqD.
-          apply int_i_heap_local; auto.
-          done.
+        - intros D₁ D₂ eqD ?? <- ?? <-.
+          apply int_i_heap_local; auto; done.
         - iFrame.
           iPureIntro.
-          apply overlap_cast.
-          eapply overlap_mono.
-          2-4: done.
-          intro ξ.
-          rewrite /not_new elem_of_difference !elem_of_of_gset.
-          set_solver.
+          assert (of_gset (names Γ) ⊆ not_new A₁).
+          { intro ξ; rewrite elem_of_of_gset /not_new elem_of_difference elem_of_of_gset.
+            clear -Γ_names_good; set_solver. }
+          split; apply overlap_cast; by eapply overlap_mono.
       }
       iApply (wp_wand with "delK").
       iIntros (v') "post".
-      iDestruct "post" as (Ni'' D'' d'') "[pure [intτ [intη #sim']]]".
-      iDestruct "pure" as %[eqN' eqD'].
-      iExists Ni'', D'', d''; iFrame.
+      iDestruct "post" as (Ni'' M'' D'' d'') "[pure [intτ [intη #sim']]]".
+      iDestruct "pure" as %[eqN' [eqM' eqD']].
+      iExists Ni'', M'', D'', d''; iFrame.
       iSplit.
-      { iPureIntro; split; auto.
-        eapply overlap_trans; eauto. }
+      { iPureIntro; repeat split; auto.
+        all: by eapply overlap_trans; eauto. }
       iAlways.
       iApply (existential_part with "sim sim'"); auto.
     Qed.
@@ -290,15 +297,17 @@ Module Delayed(AxSem: AxiomaticSemantics).
 
     Lemma frame_generic          
           (int_ty: type → @int_type Σ) (int_he: heap → @int_heap Σ) τ (η ηf: heap)          
-          D D' d v (N N': name_map) (nov: N ≡[names ηf]≡ N')
-          (int_he_split: ∀ D'' N'',
-              int_he (hstar η ηf) D'' N'' ⊣⊢ int_he η D'' N'' ∗ int_he ηf D'' N'')
+          D D' d v (M M': task_map) (N N': name_map)
+          (novM: M ≡[names ηf]≡ M') (novN: N ≡[names ηf]≡ N')
+          (int_he_split: ∀ D'' M'' N'',
+              int_he (hstar η ηf) D'' M'' N'' ⊣⊢ int_he η D'' M'' N'' ∗ int_he ηf D'' M'' N'')
           (int_he_local: ∀ η,
-              Proper (overlap (names_heap η) ==> overlap (names η) ==> (≡)) (int_he η))
+              Proper (overlap (names_heap η) ==> overlap (names η) ==>
+                              overlap (names η) ==> (≡)) (int_he η))
           (disj: names η ⊥ names ηf):
-      int_he ηf D N -∗ (⌜D' !! RET = Some d⌝ ∗ int_ty τ d N' v ∗ int_he η D' N') -∗
+      int_he ηf D M N -∗ (⌜D' !! RET = Some d⌝ ∗ int_ty τ d M' N' v ∗ int_he η D' M' N') -∗
              (⌜frame ηf D D' !! RET = Some d⌝) ∗
-             int_ty τ d N' v ∗ int_he (hstar η ηf) (frame ηf D D') N'.
+             int_ty τ d M' N' v ∗ int_he (hstar η ηf) (frame ηf D D') M' N'.
     Proof.
       iIntros "frame [eqd [type heap]]".
       iFrame.
@@ -310,22 +319,22 @@ Module Delayed(AxSem: AxiomaticSemantics).
         intros [? [[=] _]]. }
       rewrite int_he_split.
       iSplitL "heap".
-      - iApply (int_he_local with "heap"); last done.
+      - iApply (int_he_local with "heap").
+        2,3: done.
         apply overlap_merge_along_r.
         rewrite /names_heap => [n].
         rewrite !elem_of_of_list !elem_of_list_fmap.
         intros [ξ [-> inηf%elem_of_elements]] [? [[=<-] inη%elem_of_elements]].
         apply (disj ξ); done.
-      - iApply (int_he_local with "frame"); first apply overlap_merge_along_l.
-        done.
+      - by iApply (int_he_local with "frame"); first apply overlap_merge_along_l.
     Qed.
 
-    Lemma int_s_rec_split n η η' D N:
-      int_s_heap_rec n (hstar η η') D N ⊣⊢ int_s_heap_rec n η D N ∗ int_s_heap_rec n η' D N.
+    Lemma int_s_rec_split n η η' D M N:
+      int_s_heap_rec n (hstar η η') D M N ⊣⊢ int_s_heap_rec n η D M N ∗ int_s_heap_rec n η' D M N.
     Proof. destruct n; done. Qed.
     
-    Lemma int_s_heap_split η η' D N:
-      int_s_heap (hstar η η') D N ⊣⊢ (int_s_heap η D N ∗ int_s_heap η' D N).
+    Lemma int_s_heap_split η η' D M N:
+      int_s_heap (hstar η η') D M N ⊣⊢ (int_s_heap η D M N ∗ int_s_heap η' D M N).
     Proof.
       iSplit.
       { iIntros "pre".
@@ -345,10 +354,11 @@ Module Delayed(AxSem: AxiomaticSemantics).
       }
     Qed.
     
-    Lemma frame_existential Γ e (η: heap) A τ (η': heap) D D' D'' (ηf: heap)
+    Lemma frame_existential Γ e (η: heap) A τ (η': heap) D D' D'' M M' (ηf: heap)
           (disj': names η' ⊥ names ηf) (disj: names η ⊥ names ηf) (disj'': names ηf ⊥ A):
-      simulation Γ e η A τ η' D D' -∗
-                 simulation Γ e (hstar η ηf) A τ (hstar η' ηf) (frame ηf D'' D) (frame ηf D'' D').
+      simulation Γ e η A τ η' D M D' M' -∗
+                 simulation Γ e (hstar η ηf) A τ (hstar η' ηf) (frame ηf D'' D) M
+                 (frame ηf D'' D') M'.
     Proof.
       iIntros "sim".
       iIntros (N σ p K) "ctx [env pre] move".
@@ -356,13 +366,15 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iDestruct "pre" as "[pre frame]".
       iMod ("sim" with "ctx [env pre] move") as (v) "[post move]".
       { iSplitL "env".
-        - iApply (int_s_env_local with "env"). 2,3: done.
+        - iApply (int_s_env_local with "env").
+          2-4: done.
           symmetry.
           apply overlap_merge_along_r.
           rewrite /names_heap /names_env => [n].
           rewrite !elem_of_of_list !elem_of_list_fmap.
           intros [? [-> _]] [? [[=] _]].
-        - iApply (int_s_heap_local with "pre"); last done.
+        - iApply (int_s_heap_local with "pre").
+          2-3: done.
           symmetry.
           apply overlap_merge_along_r.
           rewrite /names_heap => [n].
@@ -371,30 +383,31 @@ Module Delayed(AxSem: AxiomaticSemantics).
           apply (disj x); auto. }
       iDestruct "post" as (d N') "[eqs [type post]]".
       iModIntro; iExists v; iFrame.
-      iDestruct "eqs" as %[eqN eqd].
+      iDestruct "eqs" as %[eqM [eqN eqd]].
       iExists d, N'.
-      iPoseProof (frame_generic int_s_type int_s_heap τ η' ηf D'' D' d v N N'
-                    with "[frame] [$type $post]") as "post".
-      4,6: auto.
-      - apply overlap_cast.
-        eapply overlap_mono.
-        2-4: done.
-        intros ξ.
+      assert (of_gset (names ηf) ⊆ not_new A).
+      { clear -disj''; intro.
         rewrite /not_new elem_of_difference !elem_of_of_gset.
-        set_solver.
+        set_solver. }
+      iPoseProof (frame_generic int_s_type int_s_heap τ η' ηf D'' D' d v M M' N N'
+                    with "[frame] [$type $post]") as "post".
+      1,2: apply overlap_cast; eapply overlap_mono; eauto.
+      3,5: done.
       - apply int_s_heap_split.
       - intro; apply int_s_heap_local.
-      - iApply (int_s_heap_local with "frame"); last done.
+      - iApply (int_s_heap_local with "frame").
+        2,3: done.
         symmetry; apply overlap_merge_along_l.
       - iDestruct "post" as "[% [$$]]"; auto.
     Qed.
 
     Lemma simulation_local Γ e η A τ η':
-      Proper (overlap (names_env Γ ∪ names_heap η) ==> overlap ({[RET]} ∪ names_heap η') ==> (⊣⊢))
+      Proper (overlap (names_env Γ ∪ names_heap η) ==> (=) ==>
+                      overlap ({[RET]} ∪ names_heap η') ==> (=) ==> (⊣⊢))
              (simulation Γ e η A τ η').
     Proof.
-      iIntros (D D' eqD E E' eqE).
-      rewrite /simulation /simulation_body /existential_triple.
+      iIntros (D D' eqD M M' <- E E' eqE L L' <-).
+      rewrite /simulation /existential_triple.
       f_equiv; intro N.
       f_equiv; intro σ.
       f_equiv; intro p.
@@ -402,15 +415,15 @@ Module Delayed(AxSem: AxiomaticSemantics).
       do 2 f_equiv.
       { f_equiv.
         - apply int_s_env_local.
-          2,3: done.
+          2-4: done.
           eapply overlap_mono.
           2-4: done.
-          clear; set_solver.
+          apply union_subseteq_l.
         - apply int_s_heap_local.
           2,3: done.
           eapply overlap_mono.
           2-4: done.
-          clear; set_solver. }
+          apply union_subseteq_r. }
       do 3 f_equiv; intro v.
       do 2 f_equiv; intro d.
       f_equiv; intro N'.
@@ -418,7 +431,8 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { rewrite (eqE RET); first done.
         clear; set_solver. }
       f_equiv.
-      apply int_s_heap_local; last done.
+      apply int_s_heap_local.
+      2,3: done.
       eapply overlap_mono.
       2-4: done.
       clear; set_solver.
@@ -430,15 +444,15 @@ Module Delayed(AxSem: AxiomaticSemantics).
                     delayed_typed Γ (hstar η ηf) e e' A τ (hstar η' ηf).
     Proof.
       iIntros "del".
-      iIntros (D N σ); cbn -[difference].
+      iIntros (D M N σ); cbn -[difference].
       iIntros "[env [pre frame]]".
-      iSpecialize ("del" $! D N σ with "[$env $pre]").
+      iSpecialize ("del" $! D M N σ with "[$env $pre]").
       iApply (wp_wand with "del").
       iIntros (v) "post".
-      iDestruct "post" as (N' D' d') "[eqs [type [post sim]]]".
-      iExists N', (frame ηf D D'), d'.
+      iDestruct "post" as (N' M' D' d') "[eqs [type [post sim]]]".
+      iExists N', M', (frame ηf D D'), d'.
       iFrame.
-      iDestruct "eqs" as %[eqN eqD'].
+      iDestruct "eqs" as %[eqM [eqN eqD']].
       iSplit.
       { iPureIntro; split; auto.
         rewrite /frame lookup_merge_along_not_in; first done.
@@ -446,25 +460,24 @@ Module Delayed(AxSem: AxiomaticSemantics).
         intros [? [[=] _]]. }
       iSplitR "sim".
       { iSplitL "post".
-        - iApply (int_i_heap_local with "post"); last done.
+        - iApply (int_i_heap_local with "post").
+          2,3: done.
           apply overlap_merge_along_r.
           intro n.
-          rewrite /names_heap !elem_of_of_list !elem_of_list_fmap.
-          intros [ξ [-> inηf%elem_of_elements]] [? [[=<-] inη'%elem_of_elements]].
+          rewrite !elem_of_names_heap.
+          intros [ξ [-> inηf]] [? [[=<-] inη']].
           apply (disj' ξ); done.
-        - iApply (int_i_heap_local with "frame").
-          + apply overlap_merge_along_l.
-          + symmetry; apply overlap_cast.
-            eapply overlap_mono.
-            2-4: done.
-            intro ξ.
-            rewrite /not_new elem_of_difference !elem_of_of_gset.
-            clear -disj''; set_solver. }
-      iAssert (□simulation Γ e' (η ⊗ ηf) A τ (η' ⊗ ηf) (frame ηf D D) (frame ηf D D'))
+        - assert (of_gset (names ηf) ⊆ not_new A).
+          { clear -disj''; intro; rewrite elem_of_difference !elem_of_of_gset; set_solver. }
+          iApply (int_i_heap_local with "frame").
+          2,3: apply overlap_cast; eapply overlap_mono; done.
+          apply overlap_merge_along_l. }
+      iAssert (□simulation Γ e' (η ⊗ ηf) A τ (η' ⊗ ηf) (frame ηf D D) M (frame ηf D D') M')
         with "[sim]" as "sim".
       { iDestruct "sim" as "#sim"; iAlways; iApply (frame_existential with "sim"); auto. }
       iDestruct "sim" as "#sim"; iAlways.
-      iApply (simulation_local with "sim"); last done.
+      iApply (simulation_local with "sim").
+      2-4: done.
       intros n _.
       rewrite /frame merge_along_cases.
       destruct bool_decide; done.
@@ -487,8 +500,8 @@ Module Delayed(AxSem: AxiomaticSemantics).
       - rewrite -!not_eq_None_Some; tauto.
     Qed.
     
-    Lemma restrict_env (int_ty: type → @int_type Σ) Γ Γ' D N σ (sub: Γ ⊆ Γ'):
-      intΓ int_ty Γ' D N σ -∗ intΓ int_ty Γ D N (restrict_subst Γ σ).
+    Lemma restrict_env (int_ty: type → @int_type Σ) Γ Γ' D M N σ (sub: Γ ⊆ Γ'):
+      intΓ int_ty Γ' D M N σ -∗ intΓ int_ty Γ D M N (restrict_subst Γ σ).
     Proof.
       rewrite /intΓ.
       iIntros "[maps env]".
@@ -541,24 +554,22 @@ Module Delayed(AxSem: AxiomaticSemantics).
           (subΓ: Γ ⊆ Γ') (subA: A ⊆ A'):
       delayed_typed Γ η e e' A τ η' -∗ delayed_typed Γ' η e e' A' τ η'.
     Proof.
+      assert (not_new A' ⊆ not_new A).
+      { intro; rewrite /not_new !elem_of_difference !elem_of_of_gset.
+        clear -subA; set_solver. }
       iIntros "spec".
-      iIntros (D N σ) "[env pre]".
-      iSpecialize ("spec" $! D N (restrict_subst Γ σ) with "[env $pre]").
+      iIntros (D M N σ) "[env pre]".
+      iSpecialize ("spec" $! D M N (restrict_subst Γ σ) with "[env $pre]").
       { by iApply (restrict_env with "env"). }
       rewrite restrict_env_fmap (subst_restrict_with_type ty).
       iApply (wp_wand with "spec").
       iIntros (v) "post".
-      iDestruct "post" as (N' D' d') "[eqs [type [post sim]]]".
-      iExists N', D', d'; iFrame.
-      iDestruct "eqs" as %[eqN eqd].
+      iDestruct "post" as (N' M' D' d') "[eqs [type [post sim]]]".
+      iExists N', M', D', d'; iFrame.
+      iDestruct "eqs" as %[eqN [eqm eqd]].
       iSplit.
-      { iPureIntro; split; auto.
-        eapply overlap_mono.
-        2-4: done.
-        clear -subA; red.
-        intro ξ.
-        rewrite /not_new !elem_of_difference !elem_of_of_gset.
-        set_solver. }
+      { iPureIntro; repeat split; auto.        
+        all: eapply overlap_mono; done. }
       clear eqN N N' σ v.
       iDestruct "sim" as "#sim"; iAlways.
       iIntros (N σ p K) "ctx [env pre] move".
@@ -568,14 +579,9 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iModIntro; iExists v; iFrame.
       iDestruct "post" as (d N') "[eqs [type post]]".
       iExists d, N'; iFrame.
-      iDestruct "eqs" as %[eqN eqD].
-      iPureIntro; split; auto.
-      eapply overlap_mono.
-      2-4: done.
-      clear -subA; red.
-      intro ξ.
-      rewrite /not_new !elem_of_difference !elem_of_of_gset.
-      set_solver.
+      iDestruct "eqs" as %[eqM [eqN eqD]].
+      iPureIntro; repeat split; auto.
+      all: by eapply overlap_mono.
     Qed.
 
     (** Closure: variables. *)
@@ -588,7 +594,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Lemma closed_variable (x: string) τ:
       delayed_typed (<[x:=τ]>∅) hemp x x ∅ τ hemp.
     Proof.
-      iIntros (D N σ) "[[env_names env] _]".
+      iIntros (D M N σ) "[[env_names env] _]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
@@ -596,7 +602,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { apply domD; rewrite lookup_insert; eauto. }
       rewrite /= lookup_fmap val_x /=.
       iApply wp_value'.
-      iExists N, (<[RET:=d]>D), d.
+      iExists N, M, (<[RET:=d]>D), d.
       rewrite /int_i_emp; iFrame.
       iSplit.
       { rewrite lookup_insert; auto. }
@@ -624,11 +630,11 @@ Module Delayed(AxSem: AxiomaticSemantics).
     (** Closure: constants. *)
     Lemma closed_true: delayed_typed ∅ hemp Ctrue Ctrue ∅ tbool hemp.
     Proof.
-      iIntros (D N σ) "_".
+      iIntros (D M N σ) "_".
       change (Const Ctrue) with (of_val (VConst Ctrue)).
       rewrite subst_closed_empty; last by apply val_closed.
       iApply wp_value'.
-      iExists N, (<[RET:=VConst Ctrue]>D), (VConst Ctrue).
+      iExists N, M, (<[RET:=VConst Ctrue]>D), (VConst Ctrue).
       rewrite lookup_insert; iSplit; auto.
       iSplit.
       { iPureIntro; auto. }
@@ -647,11 +653,11 @@ Module Delayed(AxSem: AxiomaticSemantics).
 
     Lemma closed_false: delayed_typed ∅ hemp Cfalse Cfalse ∅ tbool hemp.
     Proof.
-      iIntros (D N σ) "_".
+      iIntros (D M N σ) "_".
       change (Const Cfalse) with (of_val (VConst Cfalse)).
       rewrite subst_closed_empty; last by apply val_closed.
       iApply wp_value'.
-      iExists N, (<[RET:=VConst Cfalse]>D), (VConst Cfalse).
+      iExists N, M, (<[RET:=VConst Cfalse]>D), (VConst Cfalse).
       rewrite lookup_insert; iSplit; auto.
       iSplit.
       { iPureIntro; auto. }
@@ -670,11 +676,11 @@ Module Delayed(AxSem: AxiomaticSemantics).
 
     Lemma closed_unit: delayed_typed ∅ hemp Cunit Cunit ∅ tunit hemp.
     Proof.
-      iIntros (D N σ) "_".
+      iIntros (D M N σ) "_".
       change (Const Cunit) with (of_val (VConst Cunit)).
       rewrite subst_closed_empty; last by apply val_closed.
       iApply wp_value'.
-      iExists N, (<[RET:=VConst Cunit]>D), (VConst Cunit).
+      iExists N, M, (<[RET:=VConst Cunit]>D), (VConst Cunit).
       rewrite lookup_insert; iSplit; auto.
       iSplit.
       { iPureIntro; auto. }
@@ -695,7 +701,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Lemma closed_alloc (x: string) (τ: type) ξ (ξ_fresh: ξ ∉ names τ):
       delayed_typed (<[x:=τ]>∅) hemp (Alloc x) (Alloc x) {[ξ]} (tref ξ) (hpt ξ τ).
     Proof.
-      iIntros (D N σ) "[[env_names env] _]".
+      iIntros (D M N σ) "[[env_names env] _]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
@@ -707,10 +713,10 @@ Module Delayed(AxSem: AxiomaticSemantics).
         apply to_of_val. }
       iIntros (?) "post".
       iDestruct "post" as (l) "[% mt]"; subst.
-      iExists (<[ξ:=Loc l]>N), (<[RET := d]>(<[name ξ := d]>D)), d.
+      iExists (<[ξ:=Loc l]>N), M, (<[RET := d]>(<[name ξ := d]>D)), d.
       iSplit.
       { iPureIntro.
-        rewrite lookup_insert; split; auto.
+        rewrite lookup_insert; repeat split; auto.
         intro n.
         rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton => [[_ neqξ]].
         rewrite lookup_insert_ne; congruence. }
@@ -720,15 +726,13 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { iExists l, d, v; iFrame.
         rewrite !lookup_insert lookup_insert_ne ?lookup_insert; last discriminate.
         iSplit; auto.
-        iApply int_i_type_local.
-        4: iApply "env".
-        1,3: done.
-        - intros ξ' inξ'.
-          apply lookup_insert_ne.
-          congruence.
-        - iPureIntro.
-          split; first apply lookup_insert.
-          auto. }
+        iSpecialize  ("env" $! x τ v d with "[]").
+        { rewrite lookup_insert; auto. }
+        iApply (int_i_type_local with "env").
+        1,2,4: done.
+        intros ξ' inξ'.
+        apply lookup_insert_ne.
+        congruence. }
       iAlways.
       iIntros (N' σ' p K) "ctx [[env_names env] _] move".
       iDestruct "env_names" as %[domσ' _].
@@ -739,7 +743,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iModIntro; iExists (Cloc l'); iFrame.
       iExists d, (<[ξ:=Loc l']>N').
       iSplit.
-      { rewrite lookup_insert; iPureIntro; split; auto.
+      { rewrite lookup_insert; iPureIntro; repeat split; auto.
         intros ξ'.
         rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton.
         intros [_ neqξ].
@@ -752,15 +756,16 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iSplit; auto.
       iSpecialize ("env" $! x τ v' d with "[]").
       { rewrite lookup_insert; auto. }
-      iApply (int_s_type_local with "env"); auto.
+      iApply (int_s_type_local with "env").
+      1,2,4: done.
       intros ξ' inξ'.
       rewrite lookup_insert_ne; congruence.
     Qed.
 
     Implicit Types x y: string.
 
-    Lemma int_s_heap_pt ξ τ D N:
-      int_s_heap (hpt ξ τ) D N ⊣⊢ int_s_heap_rec 0 (hpt ξ τ) D N.
+    Lemma int_s_heap_pt ξ τ D M N:
+      int_s_heap (hpt ξ τ) D M N ⊣⊢ int_s_heap_rec 0 (hpt ξ τ) D M N.
     Proof.
       iSplit.
       - iIntros "pre".
@@ -772,7 +777,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Lemma closed_read x ξ τ:
       delayed_typed (<[x:=tref ξ]>∅) (hpt ξ τ) (Read x) (Read x) ∅ τ (hpt ξ τ).
     Proof.
-      iIntros (D N σ) "[[env_names env] pt]".
+      iIntros (D M N σ) "[[env_names env] pt]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
@@ -787,7 +792,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iApply (wp_wand with "[mt]").
       { iApply (wp_read with "mt"). }
       iIntros (v) "[% mt]"; subst v'.
-      iExists N, (<[RET:=d']>D), d'.
+      iExists N, M, (<[RET:=d']>D), d'.
       iFrame.
       rewrite lookup_insert.
       iSplit; auto.
@@ -826,7 +831,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
     Lemma closed_write x y ξ τ (neq: x ≠ y):
       delayed_typed (<[x:=tref ξ]>(<[y:=τ]>∅)) (hpt ξ τ) (Write x y) (Write x y) ∅ tunit (hpt ξ τ).
     Proof.
-      iIntros (D N σ) "[[env_names #env] pt]".
+      iIntros (D M N σ) "[[env_names #env] pt]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
@@ -848,7 +853,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { iExists v'; iFrame. }
       iApply (wp_wand with "wp").
       iIntros (?) "[% mt]"; subst.
-      iExists N, (<[RET:=VConst Cunit]>(<[name ξ := d']>D)), Cunit.
+      iExists N, M, (<[RET:=VConst Cunit]>(<[name ξ := d']>D)), Cunit.
       rewrite lookup_insert.
       iSplit; auto.
       iSplit; auto.
@@ -901,7 +906,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
                     delayed_typed Γ η (If x e₁ e₂) (If x e₁' e₂') A τ η'.
     Proof.
       iIntros "dtt dtf".
-      iIntros (D N σ) "[#env pre]".
+      iIntros (D M N σ) "[#env pre]".
       iPoseProof ("env") as "[env_names env_types]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
@@ -911,12 +916,12 @@ Module Delayed(AxSem: AxiomaticSemantics).
       rewrite /= lookup_fmap val_x /=.
       iDestruct ("env_types" $! x tbool v d with "[]") as %[[->| ->] <-]; first auto.
       { iApply wp_if_true.
-        iSpecialize ("dtt" $! D N σ with "[$env $pre]").
+        iSpecialize ("dtt" $! D M N σ with "[$env $pre]").
         iApply (wp_wand with "dtt").
         iClear "env env_types dtf".
         iIntros (v) "post".
-        iDestruct "post" as (N' D' d') "[names [ty [heap #sim]]]".
-        iExists N', D', d'; iFrame.
+        iDestruct "post" as (N' M' D' d') "[names [ty [heap #sim]]]".
+        iExists N', M', D', d'; iFrame.
         clear N N' d' domσ σ val_x v.
         iAlways.
         iIntros (N σ p K) "#ctx [#env pre] move".
@@ -930,12 +935,12 @@ Module Delayed(AxSem: AxiomaticSemantics).
         iApply ("sim" with "ctx [$env $pre] move").
       }{
         iApply wp_if_false.
-        iSpecialize ("dtf" $! D N σ with "[$env $pre]").
+        iSpecialize ("dtf" $! D M N σ with "[$env $pre]").
         iApply (wp_wand with "dtf").
         iClear "env env_types dtt".
         iIntros (v) "post".
-        iDestruct "post" as (N' D' d') "[names [ty [heap #sim]]]".
-        iExists N', D', d'; iFrame.
+        iDestruct "post" as (N' M' D' d') "[names [ty [heap #sim]]]".
+        iExists N', M', D', d'; iFrame.
         clear N N' d' domσ σ val_x v.
         iAlways.
         iIntros (N σ p K) "#ctx [#env pre] move".
@@ -956,7 +961,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
                     delayed_typed Γ η (Let (BNamed y) x e) (Let (BNamed y) x e') A τ' η'.
     Proof.
       iIntros "del".
-      iIntros (D N σ) "[#env pre]".
+      iIntros (D M N σ) "[#env pre]".
       iPoseProof ("env") as "[env_names env_types]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
@@ -981,7 +986,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
           rewrite lookup_empty lookup_fmap.
           destruct (σ !! z) as [w|]; cbn; trivial.
           rewrite subst_val; trivial. }
-      iSpecialize ("del" $! (<[var y := d]>D) N (<[y:=v]> σ) with "[env pre]").
+      iSpecialize ("del" $! (<[var y := d]>D) M N (<[y:=v]> σ) with "[env pre]").
       { iSplit; first iSplit.
         - iPureIntro.
           setoid_rewrite lookup_insert_is_Some.
@@ -998,15 +1003,16 @@ Module Delayed(AxSem: AxiomaticSemantics).
             rewrite lookup_insert_ne in mtv; last congruence.
             rewrite lookup_insert_ne in mtτ; last congruence.
             iApply ("env_types" $! x'); auto.
-        - iApply (int_i_heap_local with "pre"); last done.
+        - iApply (int_i_heap_local with "pre").
+          2,3: done.
           intro n.
           rewrite /names_heap elem_of_of_list elem_of_list_fmap.
           intros [ξ [-> _]].
           apply lookup_insert_ne; done. }
       iApply (wp_wand with "del").
       iIntros (w) "post".
-      iDestruct "post" as (N' D' d') "[eqs [ty [heap #sim]]]".
-      iExists N', D', d'; iFrame.
+      iDestruct "post" as (N' M' D' d') "[eqs [ty [heap #sim]]]".
+      iExists N', M', D', d'; iFrame.
       iClear "env env_types".
       clear v val_x N' d' w σ domσ N.
       iAlways.
@@ -1050,7 +1056,8 @@ Module Delayed(AxSem: AxiomaticSemantics).
             rewrite lookup_insert_ne in mtv; last congruence.
             rewrite lookup_insert_ne in mtτ; last congruence.
             iApply ("env_types" $! x'); auto.
-        - iApply (int_s_heap_local with "pre"); last done.
+        - iApply (int_s_heap_local with "pre").
+          2,3: done.
           intro n.
           rewrite /names_heap elem_of_of_list elem_of_list_fmap.
           intros [ξ [-> _]].
@@ -1067,83 +1074,96 @@ Module Delayed(AxSem: AxiomaticSemantics).
       - by rewrite !lookup_delete.
       - by rewrite !lookup_delete_ne ?lookup_insert_ne.
     Qed.
-    
+
+    Ltac intro_equiv x := f_equiv; intro x.
+
     Lemma closed_post (Γ: env) (η: heap) e e' A (τ: type) (η': heap) ξ
           (ξ_fresh_Γ: ξ ∉ names Γ) (ξ_fresh_η: ξ ∉ names η) (ξ_fresh_A: ξ ∉ A)
-          (τ_A: names τ ⊆ A) (η'_A: names η' ⊆ A):
+          (ξ_fresh_τ: ξ ∉ names τ) (ξ_fresh_η': ξ ∉ names η'):
       delayed_typed Γ η e e' A τ η' -∗
                     delayed_typed Γ η (Post e) (Post e') {[ξ]} (ttask ξ A τ) (hwait ξ A η').
     Proof.
       iIntros "del".
-      iIntros (D N σ) "pre"; cbn [subst].
+      iIntros (D M N σ) "pre"; cbn [subst].
       (* Allocate ghost state *)
       iApply fupd_wp.
       iMod (own_alloc (@unset conn_mapC)) as (γD) "ownD"; first done.
       iMod (own_alloc (@unset name_mapC)) as (γN) "ownN"; first done.
-      set (T := TaskData e' Γ η η' A D γD γN).
+      iMod (own_alloc (@unset task_mapC)) as (γM) "ownM"; first done.
+      set (T := TaskData e' Γ η η' A D M γD γM γN).
       iMod (own_alloc (to_agree T)) as (γ) "#ownγ"; first done.
       iAssert (WP subst (of_val <$> σ) e {{ x,
-                                            int_i_promise_body int_s_type int_s_heap (delete ξ N) A τ
+                                            int_i_promise_body int_s_type int_s_heap
+                                                               M N A τ
                                                                (int_i_type τ) γ  x ∗
                                                                int_i_wait_body γ η'
-                                                               (int_i_heap η') A (delete ξ N) }})
-        with "[ownD ownN del pre]"
+                                                               (int_i_heap η') A
+                                                               M N }})
+        with "[ownD ownM ownN del pre]"
         as "wp".
       { iSpecialize ("del" with "pre").
         iApply wp_fupd.
         iApply (wp_wand with "del").
         iIntros (v) "H".
-        iDestruct "H" as (N' D' d') "[eqs [ty [heap sim]]]".
+        iDestruct "H" as (N' M' D' d') "[eqs [ty [heap sim]]]".
         iMod (own_update _ _ (agreed D') with "ownD") as "#ownD"; first apply oneshot_update.
-        iMod (own_update _ _ (agreed (delete ξ N': name_mapC)) with "ownN") as "#ownN";
+        iMod (own_update _ _ (agreed (M': task_mapC)) with "ownM") as "#ownM";
+          first apply oneshot_update.
+        iMod (own_update _ _ (agreed (N': name_mapC)) with "ownN") as "#ownN";
           first apply oneshot_update.
         iModIntro.
-        iDestruct "eqs" as %[eqN eqd].
+        iDestruct "eqs" as %[eqN [eqM eqd]].
         iSplitR "heap".
-        - iExists T, D', (delete ξ N').
+        - iExists T, D', M', N'.
+          iSplit.
+          { repeat iSplit; auto. }
+          rewrite /ip_impl /ip_sim.
+          iSplitL "ty".
+          { iExists d'; iSplit; last done.
+            iPureIntro.
+            assert (of_gset (names τ ∖ A) ⊆ not_new A).
+            { clear; intro; rewrite /not_new elem_of_difference !elem_of_of_gset; set_solver. }
+            repeat split; auto.
+            all: apply overlap_cast; by eapply overlap_mono. }
+          iDestruct "sim" as "#sim"; iAlways.
+          iIntros (Ns Ns' σs eqNs _ p K) "ctx pre move".
+          iMod ("sim" with "ctx pre move") as (vs) "[post move]".
+          iModIntro; iExists vs; iFrame.
+          iDestruct "post" as (ds Ns'') "[maps [type heap]]".
+          iDestruct "maps" as %[eqM' [eqN' eqd']].
+          rewrite eqd in eqd'; injection eqd' as <-.
+          iExists d', (Ns'' ~[A]~> Ns).
+          iSplit.
+          { iPureIntro; split; last done.
+            intro ξ'.
+            rewrite /not_new elem_of_difference elem_of_of_gset => [[_ notinξ']].
+            rewrite lookup_merge_along_not_in; done. }
+          iSplitL "type".
+          + iApply (int_s_type_local with "type").
+            1,2,4: done.
+            intros ξ' inξ'.
+            destruct (decide (ξ' ∈ A)) as [case|case].
+            * by rewrite lookup_merge_along_in.
+            * rewrite lookup_merge_along_not_in; last done.
+              rewrite (eqNs ξ'); last rewrite elem_of_difference elem_of_union; auto.
+              rewrite (eqN' ξ'); first done.
+              rewrite /not_new elem_of_difference elem_of_of_gset; split; auto; clear; set_solver.
+          + iApply (int_s_heap_local with "heap").
+            1,2,4: done.
+            intros ξ' inξ'.
+            destruct (decide (ξ' ∈ A)) as [case|case].
+            * by rewrite lookup_merge_along_in.
+            * rewrite lookup_merge_along_not_in; last done.
+              rewrite (eqNs ξ'); last rewrite elem_of_difference elem_of_union; auto.
+              rewrite (eqN' ξ'); first done.
+              rewrite /not_new elem_of_difference elem_of_of_gset; split; auto; clear; set_solver.
+        - iExists T, D', N', M'; iFrame.
           iSplit.
           { by repeat iSplit. }
-          iFrame.          
-          iExists d'; iFrame.
-          iSplit.
-          + iPureIntro; split; auto.
-            apply overlap_cast.          
-            assert (delete ξ N' ≡[ not_new A ]≡ delete ξ N).
-            { intros ξ' inξ'%eqN.
-              destruct (decide (ξ = ξ')) as [<-|neq].
-              - by rewrite !lookup_delete.
-              - by rewrite !lookup_delete_ne. }
-            eapply overlap_mono.
-            2-4: done.
-            intro ξ'.
-            rewrite /not_new elem_of_of_gset !elem_of_difference elem_of_of_gset.
-            set_solver.
-          + iApply (int_i_type_local with "ty").
-            1,3: done.
-            intros ξ' inξ'%τ_A.
-            apply lookup_delete_ne.
-            intros <-; contradiction.
-        - iExists T, D', (delete ξ N').
-          iFrame.
-          iSplit.
-          { by repeat iSplit. }
-          iSplit.
-          { iPureIntro.
-            apply overlap_cast.          
-            assert (delete ξ N' ≡[ not_new A ]≡ delete ξ N).
-            { intros ξ' inξ'%eqN.
-              destruct (decide (ξ = ξ')) as [<-|neq].
-              - by rewrite !lookup_delete.
-              - by rewrite !lookup_delete_ne. }
-            eapply overlap_mono.
-            2-4: done.
-            intro ξ'.
-            rewrite /not_new elem_of_of_gset !elem_of_difference elem_of_of_gset.
-            set_solver. }
-          iApply (int_i_heap_local with "heap"); first done.
-          intros ξ' inξ'%η'_A.
-          apply lookup_delete_ne.
-          intros <-; contradiction. }
+          assert (of_gset (names η' ∖ A) ⊆ not_new A).
+          { clear; intro; rewrite /not_new elem_of_difference !elem_of_of_gset; set_solver. }
+          iPureIntro; split.
+          all: apply overlap_cast; eapply overlap_mono; eauto. }
       iPoseProof (wp_post ⊤ with "wp") as "wp".
       iModIntro.
       iApply wp_fupd.
@@ -1154,68 +1174,100 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iPoseProof (fupd_mask_mono _ ⊤ with "waits") as "waits"; first auto.
       iMod "waits" as "[promise wait]".      
       iMod (inv_alloc promiseN with "promise") as "promise".
-      iAssert (int_i_type (Promise(ξ,A) τ) Cunit (<[ξ:=Task t γ]>N) (Ctid t))
+      iAssert (int_i_type (Promise(ξ,A) τ) Cunit (<[ξ:=γ]>M) (<[ξ:=Task t]>N) (Ctid t))
         with "[promise]" as "promise".
       { cbn; iExists t, γ; iSplit.
-        - rewrite lookup_insert; auto.
-        - rewrite /typetranslation.wp_wait /=.
-          replace (delete ξ (<[ξ:=Task t γ]>N)) with (delete ξ N); first done.
-          apply map_eq; intro ξ'.
-          destruct (decide (ξ=ξ')) as [<-|neq].
-          + by rewrite !lookup_delete.
-          + rewrite !lookup_delete_ne ?lookup_insert_ne; auto. }
+        - rewrite !lookup_insert; auto.
+        - iApply (inv_Proper with "promise").
+          apply wait_Proper; intro v.
+          rewrite /int_i_promise_body /ip_impl.
+          intro_equiv U; intro_equiv D'; intro_equiv M'; intro_equiv N'.          
+          do 8 f_equiv.
+          + apply (overlap_iff (names τ ∖ A)); first done.
+            intros ξ' inξ'.
+            rewrite -delete_insert_eq.
+            apply lookup_delete_ne.
+            clear -inξ' ξ_fresh_τ; set_solver.
+          + apply (overlap_iff (names τ ∖ A)); first done.
+            intros ξ' inξ'.
+            rewrite -delete_insert_eq.
+            apply lookup_delete_ne.
+            clear -inξ' ξ_fresh_τ; set_solver. }
       iAssert (int_i_heap (Wait(ξ,A) η') (<[name ξ:=VConst Cunit]>(<[RET:=VConst Cunit]>∅))
-                          (<[ξ:=Task t γ]>N))
+                          (<[ξ:=γ]>M) (<[ξ:=Task t]>N))
         with "[wait]" as "wait".
       { cbn; iExists t, γ.
-        rewrite lookup_insert; iSplit; auto.
-        rewrite /typetranslation.wp_wait /=.
-        rewrite (delete_insert_eq ξ (Task t γ)); done. }
+        rewrite !lookup_insert; iSplit; auto.
+        iApply (wait_Proper with "wait"); intro v.
+        rewrite /int_i_wait_body.
+        intro_equiv U; intro_equiv D'; intro_equiv N'; intro_equiv M'.
+        do 4 f_equiv.
+        - rewrite -!(symmetry_iff (overlap _) N').
+          apply (overlap_iff (names η' ∖ A)); first done.
+          intros ξ' inξ'.
+          rewrite -delete_insert_eq.
+          apply lookup_delete_ne.
+          clear -inξ' ξ_fresh_η'; set_solver.
+        - rewrite -!(symmetry_iff (overlap _) M').
+          apply (overlap_iff (names η' ∖ A)); first done.
+          intros ξ' inξ'.
+          rewrite -delete_insert_eq.
+          apply lookup_delete_ne.
+          clear -inξ' ξ_fresh_η'; set_solver. }
       iModIntro.
-      iExists (<[ξ:=Task t γ]>N), (<[name ξ:=VConst Cunit]>(<[RET:=VConst Cunit]>∅)), (VConst Cunit).
+      iExists (<[ξ:=Task t]>N), (<[ξ:=γ]>M),
+        (<[name ξ:=VConst Cunit]>(<[RET:=VConst Cunit]>∅)), (VConst Cunit).
       iFrame.
       iSplit.
       { rewrite lookup_insert_ne; last discriminate.
         rewrite lookup_insert.
-        iPureIntro; split; auto.
-        intro ξ'.
-        rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton.
-        intros [_ ?].
-        rewrite lookup_insert_ne; done. }
+        iPureIntro.
+        repeat split.
+        all: intro ξ'; rewrite /not_new elem_of_difference elem_of_of_gset
+                               elem_of_singleton => [[_ notin]].
+        all: by rewrite lookup_insert_ne. }
       clear σ N.
       iAlways.
       iIntros (N σ p K) "#ctx [env pre] move"; cbn -[difference].
       iMod (simulate_post with "ctx move") as (p') "[move [move' neq]]"; auto.
       iDestruct "pre" as (n) "pre".
       iExists (Ctid p'); iFrame.
-      iExists (VConst Cunit), (<[ξ:=Task p' γ]>N).
+      iExists (VConst Cunit), (<[ξ:=Task p']>N).
       iModIntro.
       iAssert (int_s_heap (Wait(ξ,A) η') (<[name ξ:=VConst Cunit]>(<[RET:=VConst Cunit]>∅))
-                          (<[ξ:=Task p' γ]>N))
+                          (<[ξ:=γ]>M) (<[ξ:=Task p']>N))
         with "[pre move' env]" as "$".
       { iExists (S n); cbn.
-        iExists p', γ, T, (<[ξ:=Task p' γ]>N), σ.
+        iExists p', γ, T, σ.
         iSplit.
-        { iPureIntro; rewrite lookup_insert; repeat split; auto. }
+        { iPureIntro; rewrite !lookup_insert; repeat split; auto.
+          intro ξ'.
+          rewrite elem_of_difference => [[inη' notinA]].
+          rewrite lookup_insert_ne //.
+          intros <-; contradiction.
+        }
         iFrame.
-        iSplit.
-        - iApply (int_s_env_local with "env").
-          1,3: done.
-          intros ξ' inξ'.
-          apply lookup_insert_ne; congruence.
-        - iApply (int_s_heap_rec_local with "pre").
-          1,3: done.
-          intros ξ' inξ'.
-          apply lookup_insert_ne; congruence. }
+        iSplit; auto.
+        iExists N; iFrame. }
       iDestruct "neq" as %neq.
+      iSplit.
+      { iPureIntro; repeat split.
+        - intros ξ'.
+          rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton => [[_ ?]].
+          rewrite lookup_insert_ne; done.
+        - intros ξ'.
+          rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton => [[_ ?]].
+          rewrite lookup_insert_ne; done.
+        - by rewrite lookup_insert_ne ?lookup_insert. }
+      iExists γ, T.
+      iSplit; auto.
       iPureIntro.
+      exists p'.
+      rewrite !lookup_insert.
       repeat split; auto.
-      - intros ξ'.
-        rewrite /not_new elem_of_difference elem_of_of_gset not_elem_of_singleton => [[_ ?]].
-        rewrite lookup_insert_ne; done.
-      - by rewrite lookup_insert_ne ?lookup_insert.
-      - exists p', γ.
-        rewrite lookup_insert; done.
+      intros ξ'.
+      rewrite elem_of_difference => [[inξ' _]].
+      rewrite lookup_insert_ne; cbn; congruence.
     Qed.
 
     Instance wait_proper: Proper (eq ==> pointwise_relation _ (⊣⊢) ==> (⊣⊢)) (wait (Σ := Σ)).
@@ -1225,7 +1277,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
           (ξ_not_in_τ: ξ ∉ names τ) (ξ_not_in_η: ξ ∉ names η):
       delayed_typed (<[x:=ttask ξ A τ]>∅) (hwait ξ A η) (Wait x) (Wait x) A τ η.
     Proof.
-      iIntros (D N σ) "[[env_names env] pre]".
+      iIntros (D M N σ) "[[env_names env] pre]".
       iDestruct "env_names" as %[domσ domD].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
@@ -1235,7 +1287,7 @@ Module Delayed(AxSem: AxiomaticSemantics).
       { rewrite lookup_insert; eauto. }
       rewrite /= lookup_fmap val_x /=.
       iDestruct "promise" as (t γ) "[eqs promise]".
-      iDestruct "eqs" as %[mtξ ->].
+      iDestruct "eqs" as %[nameξ [mtξ ->]].
       iApply fupd_wp.
       iInv promiseN as "promisewait" "close".
       rewrite /typetranslation.wp_wait /=.
@@ -1251,7 +1303,8 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iMod "split" as "[promisewait pw']".
       iMod ("close" with "pw'") as "_".
       iDestruct "pre" as (t' γ') "[mtξ' pre]".
-      rewrite mtξ; iDestruct "mtξ'" as %[=<- <-].
+      rewrite mtξ nameξ.
+      iDestruct "mtξ'" as %[[=<-] [=<-]].
       iPoseProof (wait_combine_later with "[$pre $promisewait]") as "wait".
       iPoseProof (fupd_mask_mono _ ⊤ with "wait") as "wait"; first solve_ndisj.
       iMod "wait" as "wait".
@@ -1259,77 +1312,97 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iPoseProof (wp_wait with "wait") as "wp".
       iApply (wp_wand with "wp").
       iIntros (v) "[wb pb]".
-      iDestruct "wb" as (T D' N') "[[eqT [eqD eqN]] [eqnames heap]]".
+      rewrite /int_i_wait_body /int_i_promise_body.
+      iDestruct "wb" as (T D' N' M') "[[#eqT [#eqD [#eqN #eqM]]] [eqnames heap]]".
       iClear "promise".
-      iDestruct "pb" as (T' D'' N'') "[[eqT' [eqD' eqN']] [promise #sim]]".
+      iDestruct "pb" as (T' D'' M'' N'') "[[eqT' [eqD' [eqN' eqM']]] [promise #sim]]".
       iDestruct "promise" as (d') "[eqnames' type]".
-      iDestruct "eqnames" as %eqnames.
-      iDestruct "eqnames'" as %[eqD eqnames'].
-      iPoseProof (own_valid_2 with "eqT eqT'") as "eqT".
+      iDestruct "eqnames" as %[eqN eqM].
+      iDestruct "eqnames'" as %[eqD [eqN' eqM']].
+      iPoseProof (own_valid_2 with "eqT eqT'") as "eqT'".
       rewrite uPred.discrete_valid.
-      iDestruct "eqT" as %?%agree_op_invL'; subst T'.
-      iPoseProof (own_valid_2 with "eqD eqD'") as "eqD".
-      iPoseProof (own_valid_2 with "eqN eqN'") as "eqN".
+      iDestruct "eqT'" as %?%agree_op_invL'; subst T'.
+      iPoseProof (own_valid_2 with "eqD eqD'") as "eqD'".
+      iPoseProof (own_valid_2 with "eqN eqN'") as "eqN'".
+      iPoseProof (own_valid_2 with "eqM eqM'") as "eqM'".
       rewrite !uPred.discrete_valid.
-      iDestruct "eqD" as %?%(agreed_valid D' D'')%leibniz_equiv; subst D''. 
-      iDestruct "eqN" as %?%(agreed_valid N' N'')%leibniz_equiv; subst N''.
+      iDestruct "eqD'" as %?%(agreed_valid D' D'')%leibniz_equiv; subst D''. 
+      iDestruct "eqN'" as %?%(agreed_valid N' N'')%leibniz_equiv; subst N''. 
+      iDestruct "eqM'" as %?%(agreed_valid M' M'')%leibniz_equiv; subst M''.
       iExists (N' ~[A]~> N).
+      iExists (M' ~[A]~> M).
       iExists (<[RET:=d']>D').
       iExists d'.      
-      iSplit.
-      { iPureIntro.
-        split; last by rewrite lookup_insert.
-        intros ξ'.
-        rewrite /not_new elem_of_difference elem_of_of_gset => [[_ notinξ]].
-        rewrite lookup_merge_along_not_in; done. }
-      iSplitL "type".
+      repeat iSplit.
+      1,2,3: iPureIntro.
+      { intros ξ' inξ'.
+        rewrite lookup_merge_along_not_in; first done.
+        rewrite /not_new elem_of_difference elem_of_of_gset in inξ' * => [[_ notinξ']]; done. }
+      { intros ξ' inξ'.
+        rewrite lookup_merge_along_not_in; first done.
+        rewrite /not_new elem_of_difference elem_of_of_gset in inξ' * => [[_ notinξ']]; done. }
+      { by rewrite lookup_insert. }
       { iApply (int_i_type_local with "type").
-        1,3: done.
-        intros ξ' inξ'.
-        destruct (decide (ξ' ∈ A)) as [case|case].
-        - by rewrite lookup_merge_along_in.
-        - rewrite lookup_merge_along_not_in; last done.
-          rewrite (eqnames' ξ'); last set_solver.
+        1,4: done.
+        all: intros ξ' inξ'.
+        all: destruct (decide (ξ' ∈ A)) as [case|case].
+        1,3: by rewrite lookup_merge_along_in.
+        all: rewrite lookup_merge_along_not_in; last done.
+        - rewrite (eqM' ξ'); last by rewrite elem_of_difference.
           rewrite lookup_delete_ne; first done.
-          congruence. }
-      iSplitL "heap".
+          intros <-; contradiction.
+        - rewrite (eqN' ξ'); last by rewrite elem_of_difference.
+          rewrite lookup_delete_ne; first done.
+          intros <-; contradiction. }
       { iApply (int_i_heap_local with "heap").
-        - intros n.
-          rewrite /names_heap elem_of_of_list elem_of_list_fmap.
-          intros [ξ' [-> inξ%elem_of_elements]].
-          apply lookup_insert_ne; done.
-        - intros ξ' inξ'.
-          destruct (decide (ξ' ∈ A)) as [case|case].
-          + by rewrite lookup_merge_along_in.
-          + rewrite lookup_merge_along_not_in; last done.
-            rewrite -(eqnames ξ'); last set_solver.
-            rewrite lookup_delete_ne; first done.
-            congruence. }
+        { intro n; rewrite elem_of_names_heap; intros [ξ' [-> inξ']].
+          apply lookup_insert_ne; discriminate. }
+        all: intros ξ' inξ'.
+        all: destruct (decide (ξ' ∈ A)) as [case|case].
+        1,3: by rewrite lookup_merge_along_in.
+        all: rewrite lookup_merge_along_not_in; last done.
+        - rewrite -(eqM ξ'); last by rewrite elem_of_difference.
+          rewrite lookup_delete_ne; first done.
+          intros <-; contradiction.
+        - rewrite -(eqN ξ'); last by rewrite elem_of_difference.
+          rewrite lookup_delete_ne; first done.
+          intros <-; contradiction. }
       iAlways.
-      clear N N' mtξ eqnames eqnames' σ domσ val_x v.
+      iClear "eqN".
+      clear N N' eqN eqN' σ domσ val_x v nameξ.
       iIntros (N σ p K) "#ctx [[env_names env] pre] move".
       iDestruct "env_names" as %[domσ _].
       assert (is_Some (σ !! x)) as [v val_x].
       { apply domσ; rewrite lookup_insert; eauto. }
       iSpecialize ("env" $! x _ v d with "[]").
       { rewrite lookup_insert; auto. }
-      iDestruct "env" as %[t' [γ' [mtξ ->]]].
-      assert (γ' = γ) by admit. subst.
-      iDestruct "pre" as ([|n]) "pre".
-      { iDestruct "pre" as (t'' γ'' T' N'' D'') "[eqs [move' [_ []]]]". }
-      iDestruct "pre" as (t'' γ'' T' N'' D'') "[eqs [move' [env pre]]]".
-      rewrite /= lookup_fmap val_x /=.
-      iDestruct "eqs" as %[mtξ' [<- eqN]].
-      rewrite mtξ in mtξ'; injection mtξ' as <- <-.
+      iRename "env" into "promise".
+      iDestruct "pre" as (n) "pre".
+      destruct n; cbn -[difference].
+      all: iDestruct "pre" as (t' γ' U σ') "[maps [ownU [move' wait]]]".
+      { iDestruct "wait" as (?) "[_ []]". }
+      iDestruct "wait" as (Npre) "pre".
+      iDestruct "promise" as (γ'' T'') "[agree'' promise]".
+      iDestruct "promise" as %[t'' [mtt'' [mtγ'' [-> eqMτ]]]].
+      iDestruct "maps" as %[mtt' [mtγ' [<- [<- eqMη]]]].
+      rewrite mtt' in mtt''; injection mtt'' as <-.
+      rewrite mtγ' in mtγ''; injection mtγ'' as <-.
+      rewrite mtξ in mtγ'; injection mtγ' as <-.
+      iPoseProof (own_valid_2 with "eqT ownU") as "ownU".
+      iPoseProof (own_valid_2 with "eqT agree''") as "agree''".
+      rewrite !uPred.discrete_valid.
+      iDestruct "ownU" as %?%(agreed_valid T U)%leibniz_equiv; subst U.
+      iDestruct "agree''" as %?%(agreed_valid T _)%leibniz_equiv; subst.
+      rewrite lookup_fmap val_x /=.
       iMod (simulate_wait_schedule with "ctx move move'") as "[move move']"; first done.
-      assert (T' = T) by admit. subst T'.
-      iMod ("sim" $! _ _ _ [] with "ctx [$env pre] move'") as (v) "[post move']".
-      { by iExists n. }
-      iDestruct "post" as (d'' N') "[eqnames [type heap]]".
-      iDestruct "eqnames" as %[eqN'' eqd''].
-      rewrite eqD in eqd''; injection eqd'' as <-.
+      rename T'' into T.
+      iSpecialize ("sim" $! (Npre ~[(names τ ∪ names (td_post T)) ∖ td_alloc T]~> N) Npre σ'
+                         (overlap_merge_along_l _ _ _) eq_refl).
+      iMod ("sim" $! _ [] with "ctx [pre] move'") as (v) "[post move']".
+      { iDestruct "pre" as "[$ pre]"; iExists n; iFrame. }
+      iDestruct "post" as (d'' N'') "[names [type heap]]".
       iMod (simulate_done_schedule with "ctx move' move") as "[move' move]".
-      1,2: cbn; eauto using to_of_val.
+      1,2: eauto using to_of_val.
       iAssert (⌜t' ≠ p⌝) with "[move move']" as %neqp.
       { iDestruct "move" as "[move _]".
         iPoseProof (own_valid_2 with "move move'") as "valid".
@@ -1343,23 +1416,54 @@ Module Delayed(AxSem: AxiomaticSemantics).
       iMod (simulate_wait_done with "ctx move move'") as "[move move']".
       1,2: done.
       iModIntro; iExists v; iFrame.
-      iExists d', (N' ~[A]~> N).
-      iSplit.
-      { iPureIntro.
-        split; last by rewrite lookup_insert.
-        intros ξ'.
-        rewrite /not_new elem_of_difference elem_of_of_gset => [[_ notinξ]].
-        rewrite lookup_merge_along_not_in; done. }
-      iSplitL "type".
-      { iApply (int_s_type_local with "type").
-        1,3: done.
-        intros ξ' inξ'.
-        destruct (decide (ξ' ∈ A)).
-        - by rewrite lookup_merge_along_in.
-        - rewrite lookup_merge_along_not_in; last done.
-          rewrite -(eqN'' ξ').
-          + rewrite (eqN ξ'); first done.
-            rewrite elem_of_
-          +
+      iExists d'', (N'' ~[ td_alloc T ]~> N); iFrame.
+      rewrite lookup_insert.
+      iDestruct "names" as %[eqN eqD'].
+      repeat iSplit.
+      1,2,3: iPureIntro.
+      - intro ξ'.
+        rewrite /not_new elem_of_difference elem_of_of_gset => [[_ notin]].
+        rewrite lookup_merge_along_not_in; done.
+      - intro ξ'.
+        rewrite /not_new elem_of_difference elem_of_of_gset => [[_ notin]].
+        rewrite lookup_merge_along_not_in; done.
+      - congruence.
+      - iApply (int_s_type_local with "type").
+        1,4: done.
+        + intros ξ' inξ'.
+          destruct (decide (ξ' ∈ td_alloc T)) as [case|case].
+          * by rewrite lookup_merge_along_in.
+          * rewrite lookup_merge_along_not_in; last done.
+            rewrite (eqM' ξ').
+            2: rewrite /not_new elem_of_difference; auto.
+            rewrite lookup_delete_ne; first done; congruence.
+        + intros ξ' inξ'.
+          destruct (decide (ξ' ∈ td_alloc T)) as [case|case].
+          * by rewrite lookup_merge_along_in.
+          * rewrite lookup_merge_along_not_in; last done.
+            rewrite -(eqN ξ').
+            2: rewrite /not_new elem_of_difference elem_of_of_gset; clear -case; set_solver.
+            rewrite lookup_merge_along_in.
+            shelve.
+      - iApply (int_s_heap_local with "post").
+        + intro n'.
+          rewrite elem_of_names_heap =>[[ξ' [-> inξ']]].
+          rewrite lookup_insert_ne; done.
+        + intros ξ' inξ'.
+          destruct (decide (ξ' ∈ td_alloc T)) as [case|case].
+          * by rewrite lookup_merge_along_in.
+          * rewrite lookup_merge_along_not_in; last done.
+            rewrite -(eqM''' ξ').
+            2: rewrite /not_new elem_of_difference elem_of_of_gset; clear -case; set_solver.
+            rewrite (eqM'' ξ'); first done.
+            rewrite elem_of_difference; auto.
+        + intros ξ' inξ'.
+          destruct (decide (ξ' ∈ td_alloc T)) as [case|case].
+          * by rewrite lookup_merge_along_in.
+          * rewrite lookup_merge_along_not_in; last done.
+            rewrite -(eqN''' ξ').
+            2: rewrite /not_new elem_of_difference elem_of_of_gset; clear -case; set_solver.
+            rewrite (eqN ξ'); first done.
+            rewrite elem_of_difference; auto.
     Qed.
     

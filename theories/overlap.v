@@ -84,6 +84,16 @@ Section Facts.
     rewrite lookup_merge_along_not_in; auto.
     set_solver.
   Qed.
+
+  Global Instance overlap_delete_proper {B} (s: C): Proper (eq ==> overlap s ==> overlap s)
+                                                           (delete (M:=M B)).
+  Proof.
+    intros k ? <- m m' eqm k' ink'.
+    destruct (decide (k=k')) as [<-|neq].
+    - by rewrite !lookup_delete.
+    - rewrite !lookup_delete_ne; auto.
+  Qed.
+  
 End Facts.
 
 Lemma overlap_cast (s: gset positive) {B} (N N': gmap positive B):
