@@ -111,7 +111,7 @@ Section TypeInterpretation.
 
   Definition int_s_promise ξ A (τ: type) d N x: iProp Σ :=
     ∃ t (Npre: name_mapC), spec_task_agree t Npre ∗
-          ⌜N!!ξ = Some (Task t) ∧ Npre ≡[names τ ∖ A]≡ N⌝.
+          ⌜N!!ξ = Some (Task t) ∧ Npre ≡[names τ ∖ A]≡ N ∧ x = Ctid t⌝.
 
   (* Why is this needed? FIXME *)
   Global Instance: implStateG Σ := aig_impl_state.
@@ -161,10 +161,10 @@ Section HeapInterpretation.
 
   (* Use the lower-level interpretations here *)
   Definition int_s_wait_pre iτs' (iηs': hexpr → intT_heap) U N ts σ: iProp Σ :=
-    ∃ Npre N, int_env_pre iτs' (td_env U) (td_D_pre U) Npre σ ∗
-                          iηs' (td_pre U) (td_D_pre U) Npre  ∗
-                          spec_task_agree ts Npre ∗
-                          ⌜Npre ≡[names (td_post U) ∖ td_alloc U]≡ N⌝.
+    ∃ Npre, int_env_pre iτs' (td_env U) (td_D_pre U) Npre σ ∗
+                        iηs' (td_pre U) (td_D_pre U) Npre  ∗
+                        spec_task_agree ts Npre ∗
+                        ⌜Npre ≡[names (td_post U) ∖ td_alloc U]≡ N⌝.
   
   Definition int_s_wait iτs' iηs' ξ A η D N: iProp Σ :=
     ∃ ti ts U σ,
@@ -245,7 +245,7 @@ Section Interpretations.
       f_equiv; intro Npre.
       do 2 f_equiv.
       rewrite (eqN ξ); last (clear; set_solver).
-      f_equiv.
+      do 2 f_equiv.
       apply (overlap_iff (names (ttask ξ A τ))); last done.
       apply union_subseteq_r.
   Qed.
@@ -322,12 +322,22 @@ Section Interpretations.
       f_equiv; intro ts.
       f_equiv; intro U.
       f_equiv; intro σ.
+      destruct (decide (td_post U = η)) as [<-|neq].
+      2: iSplit; iIntros "[% _]"; intuition.
+      destruct (decide (td_alloc U = A)) as [<-|neq].
+      2: iSplit; iIntros "[% _]"; intuition.
       f_equiv.
-      rewrite (eqN ξ); last (clear; set_solver).
-      rewrite (eqD (name ξ)); first done.
-      rewrite elem_of_conn_heap; exists ξ.
-      split; auto.
-      clear; set_solver.
+      { rewrite (eqN ξ); last (clear; set_solver).
+        rewrite (eqD (name ξ)); first done.
+        rewrite elem_of_conn_heap; exists ξ.
+        split; auto.
+        clear; set_solver. }
+      { do 2 f_equiv.
+        rewrite /int_s_wait_pre.
+        f_equiv; intro Npre.
+        do 4 f_equiv.
+        eapply overlap_iff; last done.
+        apply union_subseteq_r. }
   Qed.
 
   Lemma int_s_heap_rec_local n: ∀ η,
@@ -443,8 +453,7 @@ Section Interpretations.
       iExists t,γ,U,σ; iFrame.
       iDestruct "pre" as (N') "wait".
       iExists N'.
-      iDestruct "wait" as (N'') "[$ [ϕ rest]]".
-      iExists N''; iFrame.
+      iDestruct "wait" as "[$ [ϕ $]]".
       iApply (mono with "ϕ").
   Qed.
   Lemma int_s_heap_rec_S n: ∀ η D N, int_s_heap_rec n η D N -∗ int_s_heap_rec (S n) η D N.
