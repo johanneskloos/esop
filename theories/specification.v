@@ -36,16 +36,14 @@ Definition taskbufferUR := authUR taskContentUR.
 (** A cell that records the running task. *)
 Definition runningTaskR := authR (optionUR (exclR tidC)).
 
-(** A map for accessing task data. We use a level of indirection: The specification of
- post gives us a wait permissions and a proof that the task information map
- contains a single positive number that we specified. We use this to store
- a reference to further ghost state that contains the information we need. *)
-Definition taskDataR := gmapR tid (agreeR positiveC).
+(** A map for accessing task data. This is parametric in the type of its contents. *)
+Class ImplTaskDataT := impl_task_dataT: Type.
+Notation implTaskDataR := (gmapR tid (agreeR (leibnizC impl_task_dataT))).
 
 (** Implementation heap and simulation state, presented to be usable from Iris. *)
-Class implStateG Σ :=
+Class implStateG `{ImplTaskDataT} Σ :=
   { impl_state_heap:> inG Σ heapR;
-    impl_task_data :> inG Σ taskDataR;
+    impl_task_dataG :> inG Σ implTaskDataR;
     impl_state_heap_name: gname;
     impl_task_data_name: gname
   }.
@@ -65,7 +63,8 @@ Section ImplPredicates.
     (1%Qp,) <$> to_agree <$> h.
   Definition mapstoI l v q := own impl_state_heap_name (◯mapsto_cell l v q).
   Definition authHeapI h := own impl_state_heap_name (●heap_authoritative h).
-  Definition task_agree p d := own impl_task_data_name {[ p := to_agree d ]}.
+  Definition task_agree p (d: impl_task_dataT) :=
+    own impl_task_data_name {[ p := to_agree (d: leibnizC impl_task_dataT) ]}.
 End ImplPredicates.
 
 Section SpecPredicates.
@@ -119,209 +118,254 @@ Record async_adequate e h (ϕ: val → Prop) :=
   axiomatize a WP-like approach here.
 
   TODO: Properly implement a weakestpre that allows tasks to be disabled. *)
-Module Type AxiomaticSemantics.
-  Parameter axiomaticIrisG: gFunctors → Set.
-  Existing Class axiomaticIrisG.
-  Declare Instance axiomaticIrisG_invG `{axiomaticIrisG Σ}: invG Σ.
-  Declare Instance axiomaticIrisG_implStateG `{axiomaticIrisG Σ}: implStateG Σ.
+Parameter axiomaticIrisImplG: gFunctors → Set.
+Class axiomaticIrisG `{ImplTaskDataT} Σ :=
+  AxiomaticIrisG {
+      aig_aiig :> axiomaticIrisImplG Σ;
+      aig_inv :> invG Σ;
+      aig_impl_state :> implStateG Σ
+    }.
 
-  Parameter wp: ∀ `{axiomaticIrisG Σ}, coPset -c> expr -c> (val -c> iProp Σ) -c> iProp Σ.
-  Notation "'WP' e @ E {{ Φ } }" := (wp E e Φ)
-           (at level 20, e, Φ at level 200,
-            format "'[' 'WP'  e  '/' @  E  {{  Φ  } } ']'") : uPred_scope.
-  Notation "'WP' e {{ Φ } }" := (wp ⊤ e Φ)
-           (at level 20, e, Φ at level 200,
-            format "'[' 'WP'  e  '/' {{  Φ  } } ']'") : uPred_scope.
+Parameter wp: ∀ `{axiomaticIrisG Σ}, coPset -c> expr -c> (val -c> iProp Σ) -c> iProp Σ.
+Notation "'WP' e @ E {{ Φ } }" :=
+  (wp E e Φ)
+    (at level 20, e, Φ at level 200,
+     format "'[' 'WP'  e  '/' @  E  {{  Φ  } } ']'") : uPred_scope.
+Notation "'WP' e {{ Φ } }" :=
+  (wp ⊤ e Φ)
+    (at level 20, e, Φ at level 200,
+     format "'[' 'WP'  e  '/' {{  Φ  } } ']'") : uPred_scope.
+
+Notation "'WP' e @ E {{ v , Q } }" :=
+  (wp E e (λ v, Q))
+    (at level 20, e, Q at level 200,
+     format "'[' 'WP'  e  '/' @  E  {{  v ,  Q  } } ']'") : uPred_scope.
+Notation "'WP' e {{ v , Q } }" :=
+  (wp ⊤ e (λ v, Q))
+    (at level 20, e, Q at level 200,
+     format "'[' 'WP'  e  '/' {{  v ,  Q  } } ']'") : uPred_scope.
+
+Parameter wait: ∀ `{axiomaticIrisG Σ}, tid → (tid → val → iProp Σ) → iProp Σ.
+Definition waitN := nroot .@ "wait".
+
+Section InIris.
+  Context `{axiomaticIrisG Σ, inG Σ heapUR}.
+  Local Open Scope I.
+
+  (** Local operations *)
+  Axiom wp_const: ∀ E (c: const), WP c @ E {{ x, ⌜x = VConst c⌝ }}.
+  Axiom wp_app: ∀ E f x e e' v ϕ,
+      to_val e' = Some v →
+      WP subst' f (Rec f x e) (subst' x e' e) @ E {{ ϕ }} ⊢
+         WP App (Rec f x e) e' @ E {{ ϕ }}.
+  Axiom wp_if_true: ∀ E e e' ϕ,
+      WP e @ E {{ ϕ }} ⊢ WP If Ctrue e e' @ E {{ ϕ }}.
+  Axiom wp_if_false: ∀ E e e' ϕ,
+      WP e' @ E {{ ϕ }} ⊢ WP If Cfalse e e' @ E {{ ϕ }}.
+  Axiom wp_alloc: ∀ E e v,
+      to_val e = Some v →
+      WP Alloc e @ E {{ x, ∃ l, ⌜x = VConst (Cloc l)⌝ ∗ l ↦ᵢ v }}.
+  Axiom wp_read: ∀ E l v q,
+      l ↦{q}ᵢ v ⊢ WP Read (Cloc l) @ E {{ x, ⌜x = v⌝ ∗ l ↦{q}ᵢ v }}.
+  Axiom wp_write: ∀ E l e v,
+      to_val e = Some v →
+      l ↦ᵢ - ⊢ WP Write (Cloc l) e @ E {{ x, ⌜x = VConst Cunit⌝ ∗ l ↦ᵢ v }}.
+
+  (** Axiomatization of wait permissions. *)
+  Parameter wait_data_name: gname.
+  Declare Instance wait_nonexpansive t n:
+    Proper (pointwise_relation _ (pointwise_relation _ (dist n)) ==> dist n) (wait t).
+  Axiom wait_split: ∀ t ϕ₁ ϕ₂,
+      wait t (λ t v, ϕ₁ t v ∗ ϕ₂ t v) ={↑waitN}=∗ wait t ϕ₁ ∗ wait t ϕ₂.
+  Axiom wait_split_later: ∀ t ϕ₁ ϕ₂,
+      ▷wait t (λ t v, ϕ₁ t v ∗ ϕ₂ t v) ={↑waitN}=∗ ▷wait t ϕ₁ ∗ ▷wait t ϕ₂.
+  Axiom wait_combine: ∀ t ϕ₁ ϕ₂,
+      wait t ϕ₁ ∗ wait t ϕ₂ ={↑waitN}=∗ wait t (λ t v, ϕ₁ t v ∗ ϕ₂ t v).
+  Axiom wait_combine_later: ∀ t ϕ₁ ϕ₂,
+      ▷wait t ϕ₁ ∗ ▷wait t ϕ₂ ={↑waitN}=∗ ▷wait t (λ t v, ϕ₁ t v ∗ ϕ₂ t v).
+
+  (** Task operations *)
+  Axiom wp_post: ∀ E e ϕ d,
+      (∀ t, task_agree t d -∗ WP e {{ ϕ t }})
+        ⊢ WP Post e @ E {{ v, ∃ t, ⌜v = VConst (Ctid t)⌝ ∗ wait t ϕ ∗ task_agree t d  }}.
+  Axiom wp_wait: ∀ E t ϕ,
+      ▷wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ϕ t v }}.
   
-  Notation "'WP' e @ E {{ v , Q } }" := (wp E e (λ v, Q))
-           (at level 20, e, Q at level 200,
-            format "'[' 'WP'  e  '/' @  E  {{  v ,  Q  } } ']'") : uPred_scope.
-  Notation "'WP' e {{ v , Q } }" := (wp ⊤ e (λ v, Q))
-           (at level 20, e, Q at level 200,
-            format "'[' 'WP'  e  '/' {{  v ,  Q  } } ']'") : uPred_scope.
-
-  Parameter wait: ∀ `{axiomaticIrisG Σ}, tid → (val → iProp Σ) → iProp Σ.
-
-  Section InIris.
-    Context `{axiomaticIrisG Σ, inG Σ heapUR} (heap_name task_buffer_name: gname).
-    Local Open Scope I.
-
-    (** Local operations *)
-    Axiom wp_const: ∀ E (c: const), WP c @ E {{ x, ⌜x = VConst c⌝ }}.
-    Axiom wp_app: ∀ E f x e e' v ϕ,
-        to_val e' = Some v →
-        WP subst' f (Rec f x e) (subst' x e' e) @ E {{ ϕ }} ⊢
-        WP App (Rec f x e) e' @ E {{ ϕ }}.
-    Axiom wp_if_true: ∀ E e e' ϕ,
-        WP e @ E {{ ϕ }} ⊢ WP If Ctrue e e' @ E {{ ϕ }}.
-    Axiom wp_if_false: ∀ E e e' ϕ,
-        WP e' @ E {{ ϕ }} ⊢ WP If Cfalse e e' @ E {{ ϕ }}.
-    Axiom wp_alloc: ∀ E e v,
-        to_val e = Some v →
-        WP Alloc e @ E {{ x, ∃ l, ⌜x = VConst (Cloc l)⌝ ∗ l ↦ᵢ v }}.
-    Axiom wp_read: ∀ E l v q,
-        l ↦{q}ᵢ v ⊢ WP Read (Cloc l) @ E {{ x, ⌜x = v⌝ ∗ l ↦{q}ᵢ v }}.
-    Axiom wp_write: ∀ E l e v,
-        to_val e = Some v →
-        l ↦ᵢ - ⊢ WP Write (Cloc l) e @ E {{ x, ⌜x = VConst Cunit⌝ ∗ l ↦ᵢ v }}.
-
-    (** Axiomatization of wait permissions. *)
-    Parameter waitN: namespace.
-    Declare Instance wait_nonexpansive t n:
-      Proper (pointwise_relation _ (dist n) ==> dist n) (wait t).
-    Axiom wait_split: ∀ t ϕ₁ ϕ₂,
-        wait t (λ v, ϕ₁ v ∗ ϕ₂ v) ={↑waitN}=∗ wait t ϕ₁ ∗ wait t ϕ₂.
-    Axiom wait_split_later: ∀ t ϕ₁ ϕ₂,
-        ▷wait t (λ v, ϕ₁ v ∗ ϕ₂ v) ={↑waitN}=∗ ▷wait t ϕ₁ ∗ ▷wait t ϕ₂.
-    Axiom wait_combine: ∀ t ϕ₁ ϕ₂,
-        wait t ϕ₁ ∗ wait t ϕ₂ ={↑waitN}=∗ wait t (λ v, ϕ₁ v ∗ ϕ₂ v).
-    Axiom wait_combine_later: ∀ t ϕ₁ ϕ₂,
-        ▷wait t ϕ₁ ∗ ▷wait t ϕ₂ ={↑waitN}=∗ ▷wait t (λ v, ϕ₁ v ∗ ϕ₂ v).
-
-    (** Task operations *)
-    Axiom wp_post: ∀ E e ϕ,
-        WP e {{ ϕ }} ⊢
-        WP Post e @ E {{ v, ∃ t, ⌜v = VConst (Ctid t)⌝ ∗ wait t ϕ }}.
-    Axiom wp_wait: ∀ E t ϕ,
-        ▷wait t ϕ ⊢ WP Wait (Ctid t) @ E {{ v, ϕ v }}.
-    
-    (** Meta-theory and bind rule; this duplicates parts of [program_logic/weakestpre],
+  (** Meta-theory and bind rule; this duplicates parts of [program_logic/weakestpre],
         namely everything that requires unfolding. The rest can be shown from these axioms. *)
-    Declare Instance wp_nonexpansive E e n:
-      Proper (pointwise_relation _ (dist n) ==> dist n) (wp E e).
-    Axiom wp_value': ∀ E ϕ v, ϕ v ⊢ WP of_val v @ E {{ ϕ }}.
-    Axiom wp_value_inv: ∀ E ϕ v, WP of_val v @ E {{ ϕ }} ={E}=∗ ϕ v.
-    Axiom wp_strong_mono: ∀ E E' e ϕ ψ,
-        E ⊆ E' → (∀ v, ϕ v ={E'}=∗ ψ v) ∗ WP e @ E {{ ϕ }} ⊢ WP e @ E' {{ ψ }}.
-    Axiom fupd_wp: ∀ E e ϕ, (|={E}=> WP e @ E {{ ϕ }}) ⊢ WP e @ E {{ ϕ }}.
+  Declare Instance wp_nonexpansive E e n:
+    Proper (pointwise_relation _ (dist n) ==> dist n) (wp E e).
+  Axiom wp_value': ∀ E ϕ v, ϕ v ⊢ WP of_val v @ E {{ ϕ }}.
+  Axiom wp_value_inv: ∀ E ϕ v, WP of_val v @ E {{ ϕ }} ={E}=∗ ϕ v.
+  Axiom wp_strong_mono: ∀ E E' e ϕ ψ,
+      E ⊆ E' → (∀ v, ϕ v ={E'}=∗ ψ v) ∗ WP e @ E {{ ϕ }} ⊢ WP e @ E' {{ ψ }}.
+  Axiom fupd_wp: ∀ E e ϕ, (|={E}=> WP e @ E {{ ϕ }}) ⊢ WP e @ E {{ ϕ }}.
 
-    Parameter atomic: expr → Prop.
-    Existing Class atomic.
-    Axiom wp_atomic: ∀ E E' e ϕ,
-        atomic e →
-        (|={E,E'}=> WP e @ E' {{ v, |={E',E}=> ϕ v }}) ⊢ WP e @ E {{ ϕ }}.
-    Axiom atomic_alloc: ∀ e v, to_val e = Some v → atomic (Alloc e).
-    Axiom atomic_read: ∀ l, atomic (Read (Cloc l)).
-    Axiom atomic_write: ∀ l e v, to_val e = Some v → atomic (Write (Cloc l) e).
-    Axiom atomic_post: ∀ e, atomic (Post e).
-    Axiom atomic_skip: ∀ f x e v e' v',
-        to_val e = Some v → to_val e' = Some v' →
-        atomic (App (Rec f x e) e').
-    
-    Axiom wp_step_fupd: ∀ E E' e P ϕ,
+  Axiom wp_atomic: ∀ E E' e ϕ,
+      atomic e →
+      (|={E,E'}=> WP e @ E' {{ v, |={E',E}=> ϕ v }}) ⊢ WP e @ E {{ ϕ }}.
+  
+  Axiom wp_step_fupd: ∀ E E' e P ϕ,
       to_val e = None →
       E' ⊆ E →
       (|={E,E'}▷=> P) -∗ WP e @ E' {{ v, P ={E}=∗ ϕ v }} -∗ WP e @ E {{ ϕ }}.
-    Axiom wp_bind_item: ∀ K E e ϕ,
-        WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }} ⊢
-        WP (fill_ctx_item e K) @ E {{ ϕ }}.
-    Axiom wp_bind_item_inv: ∀ K E e ϕ,
-        WP (fill_ctx_item e K) @ E {{ ϕ }} ⊢
-        WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }}.
+  Axiom wp_bind_item: ∀ K E e ϕ,
+      WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }} ⊢
+         WP (fill_ctx_item e K) @ E {{ ϕ }}.
+  Axiom wp_bind_item_inv: ∀ K E e ϕ,
+      WP (fill_ctx_item e K) @ E {{ ϕ }} ⊢
+         WP e @ E {{ v, WP (fill_ctx_item (of_val v) K) @ E {{ ϕ }} }}.
 
-    (** This duplicates results from [program_logic/adequacy]. *)
-    Axiom wp_adequate: ∀ h e ϕ,
-        (|={⊤}=> authHeapI h ∗ WP e {{ v, ⌜ϕ v⌝ }}) → async_adequate e h ϕ.
-  End InIris.
-End AxiomaticSemantics.
+  (** This duplicates results from [program_logic/adequacy]. *)
+  Axiom wp_adequate: ∀ h e ϕ,
+      (|={⊤}=> authHeapI h ∗ WP e {{ v, ⌜ϕ v⌝ }}) → async_adequate e h ϕ.
 
-Module AxiomaticFacts(Import AxSem: AxiomaticSemantics).
-  Section InIris.
-    Context `{axiomaticIrisG Σ, inG Σ heapUR} (heap_name task_buffer_name: gname).
-    Local Open Scope I.
-    Global Instance wp_proper E e: Proper (pointwise_relation _ (≡) ==> (≡)) (wp E e).
-    Proof.
-      intros ϕ ϕ' eqϕ; by apply equiv_dist => n; apply wp_nonexpansive => v; apply equiv_dist.
-    Qed.
-    
-    Lemma wp_mono E e Φ Ψ : (∀ v, Φ v ⊢ Ψ v) → WP e @ E {{ Φ }} ⊢ WP e @ E {{ Ψ }}.
-    Proof.
-      iIntros (HΦ) "H"; iApply (wp_strong_mono E E); auto.
-      iIntros "{$H}" (v) "?". by iApply HΦ.
-    Qed.
-    Lemma wp_mask_mono E1 E2 e Φ : E1 ⊆ E2 → WP e @ E1 {{ Φ }} ⊢ WP e @ E2 {{ Φ }}.
-    Proof. iIntros (?) "H"; iApply (wp_strong_mono E1 E2); auto. iFrame; eauto. Qed.
-    Global Instance wp_mono' E e :
-      Proper (pointwise_relation _ (⊢) ==> (⊢)) (wp E e).
-    Proof. by intros Φ Φ' ?; apply wp_mono. Qed.
+  (** Derived facts *)
 
-    (*
-    Lemma wp_value E Φ e v `(to_val e = Some v): Φ v ⊢ WP e @ E {{ Φ }}.
-    Proof. intros; rewrite -(of_to_val e v) //; by apply wp_value'. Qed.*)
-    Lemma wp_fupd E e Φ : WP e @ E {{ v, |={E}=> Φ v }} ⊢ WP e @ E {{ Φ }}.
-    Proof. iIntros "H". iApply (wp_strong_mono E); try iFrame; auto. Qed.
-    Lemma wp_value_fupd' E Φ v : (|={E}=> Φ v) ⊢ WP of_val v @ E {{ Φ }}.
-    Proof. intros. by rewrite -wp_fupd -wp_value'. Qed.
-    (*
-    Lemma wp_value_fupd E Φ e v `{!IntoVal e v} : (|={E}=> Φ v) ⊢ WP e @ E {{ Φ }}.
-    Proof. intros. rewrite -wp_fupd -wp_value //. Qed.*)
+  Global Instance wp_proper E e: Proper (pointwise_relation _ (≡) ==> (≡)) (wp E e).
+  Proof.
+    intros ϕ ϕ' eqϕ; by apply equiv_dist => n; apply wp_nonexpansive => v; apply equiv_dist.
+  Qed.
+  
+  Lemma wp_mono E e Φ Ψ : (∀ v, Φ v ⊢ Ψ v) → WP e @ E {{ Φ }} ⊢ WP e @ E {{ Ψ }}.
+  Proof.
+    iIntros (HΦ) "H"; iApply (wp_strong_mono E E); auto.
+    iIntros "{$H}" (v) "?". by iApply HΦ.
+  Qed.
+  Lemma wp_mask_mono E1 E2 e Φ : E1 ⊆ E2 → WP e @ E1 {{ Φ }} ⊢ WP e @ E2 {{ Φ }}.
+  Proof. iIntros (?) "H"; iApply (wp_strong_mono E1 E2); auto. iFrame; eauto. Qed.
+  Global Instance wp_mono' E e :
+    Proper (pointwise_relation _ (⊢) ==> (⊢)) (wp E e).
+  Proof. by intros Φ Φ' ?; apply wp_mono. Qed.
 
-    Lemma wp_frame_l E e Φ R : R ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ v, R ∗ Φ v }}.
-    Proof. iIntros "[??]". iApply (wp_strong_mono E E _ Φ); try iFrame; eauto. Qed.
-    Lemma wp_frame_r E e Φ R : WP e @ E {{ Φ }} ∗ R ⊢ WP e @ E {{ v, Φ v ∗ R }}.
-    Proof. iIntros "[??]". iApply (wp_strong_mono E E _ Φ); try iFrame; eauto. Qed.
+  Lemma wp_value E Φ e v `(to_val e = Some v): Φ v ⊢ WP e @ E {{ Φ }}.
+  Proof. intros; rewrite -(of_to_val e v) //; by apply wp_value'. Qed.
+  Lemma wp_fupd E e Φ : WP e @ E {{ v, |={E}=> Φ v }} ⊢ WP e @ E {{ Φ }}.
+  Proof. iIntros "H". iApply (wp_strong_mono E); try iFrame; auto. Qed.
+  Lemma wp_value_fupd' E Φ v : (|={E}=> Φ v) ⊢ WP of_val v @ E {{ Φ }}.
+  Proof. intros. by rewrite -wp_fupd -wp_value'. Qed.
+  Lemma wp_value_fupd E Φ e v `(to_val e = Some v) : (|={E}=> Φ v) ⊢ WP e @ E {{ Φ }}.
+  Proof. intros. rewrite -wp_fupd -wp_value //. Qed.
 
-    Lemma wp_frame_step_l E1 E2 e Φ R :
-      to_val e = None → E2 ⊆ E1 →
-      (|={E1,E2}▷=> R) ∗ WP e @ E2 {{ Φ }} ⊢ WP e @ E1 {{ v, R ∗ Φ v }}.
-    Proof.
-      iIntros (??) "[Hu Hwp]". iApply (wp_step_fupd with "Hu"); try done.
-      iApply (wp_mono with "Hwp"). by iIntros (?) "$$".
-    Qed.
-    Lemma wp_frame_step_r E1 E2 e Φ R :
-      to_val e = None → E2 ⊆ E1 →
-      WP e @ E2 {{ Φ }} ∗ (|={E1,E2}▷=> R) ⊢ WP e @ E1 {{ v, Φ v ∗ R }}.
-    Proof.
-      rewrite [(WP _ @ _ {{ _ }} ∗ _)%I]comm.
-      setoid_rewrite (comm _ _ R).
-      apply wp_frame_step_l.
-    Qed.
-    Lemma wp_frame_step_l' E e Φ R :
-      to_val e = None → ▷ R ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ v, R ∗ Φ v }}.
-    Proof. iIntros (?) "[??]". iApply (wp_frame_step_l E E); try iFrame; eauto. Qed.
-    Lemma wp_frame_step_r' E e Φ R :
-      to_val e = None → WP e @ E {{ Φ }} ∗ ▷ R ⊢ WP e @ E {{ v, Φ v ∗ R }}.
-    Proof. iIntros (?) "[??]". iApply (wp_frame_step_r E E); try iFrame; eauto. Qed.
+  Lemma wp_frame_l E e Φ R : R ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ v, R ∗ Φ v }}.
+  Proof. iIntros "[??]". iApply (wp_strong_mono E E _ Φ); try iFrame; eauto. Qed.
+  Lemma wp_frame_r E e Φ R : WP e @ E {{ Φ }} ∗ R ⊢ WP e @ E {{ v, Φ v ∗ R }}.
+  Proof. iIntros "[??]". iApply (wp_strong_mono E E _ Φ); try iFrame; eauto. Qed.
 
-    Lemma wp_wand E e Φ Ψ :
-      WP e @ E {{ Φ }} -∗ (∀ v, Φ v -∗ Ψ v) -∗ WP e @ E {{ Ψ }}.
-    Proof.
-      iIntros "Hwp H". iApply (wp_strong_mono E); auto.
-      iIntros "{$Hwp}" (?) "?". by iApply "H".
-    Qed.
-    Lemma wp_wand_l E e Φ Ψ :
-      (∀ v, Φ v -∗ Ψ v) ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ Ψ }}.
-    Proof. iIntros "[H Hwp]". iApply (wp_wand with "Hwp H"). Qed.
-    Lemma wp_wand_r E e Φ Ψ :
-      WP e @ E {{ Φ }} ∗ (∀ v, Φ v -∗ Ψ v) ⊢ WP e @ E {{ Ψ }}.
-    Proof. iIntros "[Hwp H]". iApply (wp_wand with "Hwp H"). Qed.
-  End InIris.
-End AxiomaticFacts.
+  Lemma wp_frame_step_l E1 E2 e Φ R :
+    to_val e = None → E2 ⊆ E1 →
+    (|={E1,E2}▷=> R) ∗ WP e @ E2 {{ Φ }} ⊢ WP e @ E1 {{ v, R ∗ Φ v }}.
+  Proof.
+    iIntros (??) "[Hu Hwp]". iApply (wp_step_fupd with "Hu"); try done.
+    iApply (wp_mono with "Hwp"). by iIntros (?) "$$".
+  Qed.
+  Lemma wp_frame_step_r E1 E2 e Φ R :
+    to_val e = None → E2 ⊆ E1 →
+    WP e @ E2 {{ Φ }} ∗ (|={E1,E2}▷=> R) ⊢ WP e @ E1 {{ v, Φ v ∗ R }}.
+  Proof.
+    rewrite [(WP _ @ _ {{ _ }} ∗ _)%I]comm.
+    setoid_rewrite (comm _ _ R).
+    apply wp_frame_step_l.
+  Qed.
+  Lemma wp_frame_step_l' E e Φ R :
+    to_val e = None → ▷ R ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ v, R ∗ Φ v }}.
+  Proof. iIntros (?) "[??]". iApply (wp_frame_step_l E E); try iFrame; eauto. Qed.
+  Lemma wp_frame_step_r' E e Φ R :
+    to_val e = None → WP e @ E {{ Φ }} ∗ ▷ R ⊢ WP e @ E {{ v, Φ v ∗ R }}.
+  Proof. iIntros (?) "[??]". iApply (wp_frame_step_r E E); try iFrame; eauto. Qed.
+
+  Lemma wp_wand E e Φ Ψ :
+    WP e @ E {{ Φ }} -∗ (∀ v, Φ v -∗ Ψ v) -∗ WP e @ E {{ Ψ }}.
+  Proof.
+    iIntros "Hwp H". iApply (wp_strong_mono E); auto.
+    iIntros "{$Hwp}" (?) "?". by iApply "H".
+  Qed.
+  Lemma wp_wand_l E e Φ Ψ :
+    (∀ v, Φ v -∗ Ψ v) ∗ WP e @ E {{ Φ }} ⊢ WP e @ E {{ Ψ }}.
+  Proof. iIntros "[H Hwp]". iApply (wp_wand with "Hwp H"). Qed.
+  Lemma wp_wand_r E e Φ Ψ :
+    WP e @ E {{ Φ }} ∗ (∀ v, Φ v -∗ Ψ v) ⊢ WP e @ E {{ Ψ }}.
+  Proof. iIntros "[Hwp H]". iApply (wp_wand with "Hwp H"). Qed.
+
+  Lemma wp_bind_inv K E e ϕ:
+    WP fill_ctx e K @ E {{ ϕ }} ⊢ WP e @ E {{ v, WP fill_ctx (of_val v) K @ E {{ ϕ }} }}.
+  Proof.
+    revert e ϕ.
+    induction K using rev_ind; iIntros (e ϕ) "wp"; cbn.
+    { iApply (wp_wand with "wp").
+      iIntros (v); iApply wp_value'. }
+    rewrite -!fill_ctx_app /=.
+    iPoseProof (wp_bind_item_inv with "wp") as "wp".
+    iPoseProof (IHK with "wp") as "wp".
+    iApply (wp_wand with "wp").
+    iIntros (v) "wp".
+    rewrite -fill_ctx_app /=.
+    iApply wp_bind_item; done.
+  Qed.
+  
+  Lemma wp_bind K E e ϕ:
+    WP e@E {{ v, WP fill_ctx (of_val v) K @ E {{ ϕ }} }}
+       -∗ WP fill_ctx e K @ E {{ ϕ }}.
+  Proof.
+    revert e ϕ.
+    induction K using rev_ind; iIntros (e ϕ) "wp"; cbn.
+    { iApply (wp_strong_mono with "[$wp]"); first done.
+      iIntros (v); iApply wp_value_inv. }
+    rewrite -!fill_ctx_app /=.
+    iApply wp_bind_item.
+    iApply IHK.
+    iApply (wp_wand with "wp").
+    iIntros (v) "wp".
+    iApply wp_bind_item_inv.
+    rewrite -fill_ctx_app; done.
+  Qed.
+End InIris.
 
 (** Simulation-side ghost state semantics. *)
-Section Simulation.
-  Context `{specStateG Σ, invG Σ, inG Σ heapR}.
-  Local Open Scope I.
-  
-  Definition spec_state_invariant c₀: iProp Σ := ∃ c, ⌜cfg_steps c₀ c⌝ ∗ cfg_authoriative c.
-  Definition specN := nroot .@ "spec".
-  Definition spec_ctx c₀ := inv specN (spec_state_invariant c₀).
+Class InitialConfiguration := initial_cfg: cfg.
+Class SpecTaskDataT := spec_task_data_t: Type.
+Class SpecTaskDataG `{SpecTaskDataT} Σ :=
+  { spec_task_dataG :> inG Σ (authR (gmapUR tid (agreeR (leibnizC spec_task_data_t))));
+    spec_task_data_name: gname
+  }.
 
-  Context (c₀: cfg) (E: coPset) (Egood: ↑specN ⊆ E) (p: tid) (K: list ctx_item).
-  Notation ctx := (spec_ctx c₀).
+Section Simulation.
+  Context `{specStateG Σ, invG Σ, inG Σ heapR,InitialConfiguration, SpecTaskDataG Σ}.
+  Local Open Scope I.
+  Definition spec_task_agree (t: tid) (d: spec_task_data_t) :=
+    own spec_task_data_name (◯{[t := to_agree (d: leibnizC spec_task_data_t) ]}).
+  Definition spec_task_auth (D: gmap tid (agreeR (leibnizC spec_task_data_t))) :=
+    own spec_task_data_name (●D).
+  Definition spec_state_invariant: iProp Σ :=
+    ∃ c (d: gmap tid (agree spec_task_data_t)),
+      ⌜cfg_steps initial_cfg c ∧
+      dom (gset tid) d ⊆ dom (gset tid) (cfg_tb c)⌝ ∗
+          cfg_authoriative c ∗ spec_task_auth d.
+
+  Definition specN := nroot .@ "spec".
+  Definition spec_ctx := inv specN spec_state_invariant.
+
+  Context (E: coPset) (Egood: ↑specN ⊆ E) (p: tid) (K: list ctx_item).
+  Notation ctx := spec_ctx.
   Notation ACT e := (p ⤇ active: fill_ctx e K).
 
-  Lemma simulate_local_step {A} e (e': A → expr) ϕ ϕ':
+  Lemma simulate_local_step_full {A} e (e': A → expr) ϕ ϕ':
     ctx -∗ ACT e -∗ ϕ -∗
-        (∀ h t e'', ⌜t !! p = None⌝ → ϕ ∗ authHeapS h ∗ task_authoritative (<[p:=e'']>t) p
-                ={E ∖ ↑specN}=∗ ∃ h' t' a, ϕ' a ∗ authHeapS h' ∗ task_authoritative (<[p:=e'']>t') p ∗
-                                            ⌜head_step p e h t (e' a) h' t' ∧ t' !! p = None⌝)
+        (∀ h t e'' d, ⌜t !! p = None ∧ dom (gset tid) (delete p d) ⊆ dom (gset tid) t⌝ →
+                      ϕ ∗ authHeapS h ∗ task_authoritative (<[p:=e'']>t) p ∗ spec_task_auth d
+                      ={E ∖ ↑specN}=∗ ∃ h' t' a d',
+                           ϕ' a ∗ authHeapS h' ∗
+                              task_authoritative (<[p:=e'']>t') p ∗
+                              spec_task_auth d' ∗
+                              ⌜head_step p e h t (e' a) h' t' ∧ t' !! p = None ∧
+                           dom (gset tid) (delete p d') ⊆ dom (gset tid) t'⌝)
+
     ={E}=∗ ∃ a, ACT (e' a) ∗ ϕ' a.
   Proof.
     iIntros "ctx [task act] pre move".
     iMod (inv_open_timeless with "ctx") as "[inv close]"; auto.
-    iDestruct "inv" as ([h t p']) "[steps [heap [tasks sched]]]"; cbn.
-    iDestruct "steps" as %steps.
+    iDestruct "inv" as ([h t p'] d) "[steps [[heap [tasks sched]] task_data]]".
+    iDestruct "steps" as %[steps domd].
     iAssert (⌜p = p'⌝) with "[act sched]" as %<-.
     { iPoseProof (own_valid_2 with "sched act") as "valid".
       rewrite uPred.discrete_valid auth_valid_discrete_2 /=.
@@ -334,11 +378,14 @@ Section Simulation.
       apply Excl_included, leibniz_equiv in incl.
       subst; auto. }
     iMod ("move" $! h (delete p t)
-          with "[] [$pre $heap tasks $sched]") as (h' t' a) "[post [heap [[tasks sched] step]]]".
-    { rewrite lookup_delete; auto. }
-    { rewrite insert_delete insert_id; eauto. }
+          with "[] [$pre $heap $task_data tasks $sched]")
+      as (h' t' a d') "[post [heap [[tasks sched] [task_data step]]]]".
+    { rewrite lookup_delete; iSplit; auto.
+      iPureIntro; rewrite !dom_delete.
+      set_solver. }
+    { rewrite insert_delete insert_id; eauto; iFrame. }
     set (e'' := fill_ctx (e' a) K).
-    iDestruct "step" as %[step task'].
+    iDestruct "step" as %[step [task' domd']].
     iMod (own_update_2 _ _ _
                        (task_buffer_translate (<[p:=running e'']>t') ⋅ task_runnable p e'')
           with "tasks task")
@@ -354,19 +401,53 @@ Section Simulation.
     iExists a; iFrame.
     iApply "close".
     iExists (CFG h' (<[p:=running e'']>t') p); iFrame.
+    iExists d'; iFrame.
     iPureIntro.
-    eapply rtc_r; eauto.
-    econstructor 1; cbn; eauto.
-    { apply lookup_insert. }
     split.
-    rewrite delete_insert; auto.
+    { eapply rtc_r; eauto.
+      econstructor 1; cbn; eauto.
+      { apply lookup_insert. }
+      split.
+      rewrite delete_insert; auto. }
+    cbn in *; clear -domd'.
+    rewrite dom_insert.
+    rewrite dom_delete in domd' * => [domd'].
+    intros t int.
+    destruct (decide (t = p)) as [<-|neq]; set_solver.
+  Qed.
+
+  Lemma simulate_local_step {A} e (e': A → expr) ϕ ϕ':
+    ctx -∗ ACT e -∗ ϕ -∗
+        (∀ h t e'', ⌜t !! p = None⌝ →
+                    ϕ ∗ authHeapS h ∗ task_authoritative (<[p:=e'']>t) p
+                    ={E ∖ ↑specN}=∗ ∃ h' t' a, ϕ' a ∗ authHeapS h' ∗
+                                                  task_authoritative (<[p:=e'']>t') p ∗
+                                                  ⌜head_step p e h t (e' a) h' t' ∧ t' !! p = None⌝)
+    ={E}=∗ ∃ a, ACT (e' a) ∗ ϕ' a.
+  Proof.
+    iIntros "ctx act pre step".
+    iApply (simulate_local_step_full with "ctx act pre [step]").
+    iIntros (h t e'' d) "[p_fresh subd] [pre [heap [task task_data]]]".
+    iMod ("step" with "p_fresh [$pre $heap $task]") as (h' t' a) "[post [heap [task step]]]".
+    iModIntro.
+    iExists h', t', a, d; iFrame.
+    iDestruct "step" as %[step task_mono].
+    iDestruct "subd" as %subd.
+    iSplit; auto.
+    iPureIntro; split; auto.
+    etrans; first apply subd.
+    clear -step.
+    destruct step; try done.
+    rewrite dom_insert.
+    apply union_subseteq_r.
   Qed.
 
   Lemma simulate_local_step_det e e' ϕ ϕ':
     ctx -∗ ACT e -∗ ϕ -∗
-        (∀ h t e'', ⌜t !! p = None⌝ → ϕ ∗ authHeapS h ∗ task_authoritative (<[p:=e'']>t) p
-                ={E ∖ ↑specN}=∗ ∃ h' t', ϕ' ∗ authHeapS h' ∗ task_authoritative (<[p:=e'']>t') p ∗
-                                            ⌜head_step p e h t e' h' t' ∧ t' !! p = None⌝)
+        (∀ h t e'', ⌜t !! p = None⌝ →
+                    ϕ ∗ authHeapS h ∗ task_authoritative (<[p:=e'']>t) p
+                    ={E ∖ ↑specN}=∗ ∃ h' t', ϕ' ∗ authHeapS h' ∗ task_authoritative (<[p:=e'']>t') p ∗
+                                                ⌜head_step p e h t e' h' t' ∧ t' !! p = None⌝)
     ={E}=∗ ACT e' ∗ ϕ'.
   Proof.
     iIntros "ctx act pre move".
@@ -487,17 +568,18 @@ Section Simulation.
     constructor; done.
   Qed.
 
-  Lemma simulate_post_strong (bad: gset tid) e:
-    ctx -∗ ACT (Post e) ={E}=∗ ∃ (p': tid), ACT (Ctid p') ∗ p' ⤇ run: e ∗ ⌜p' ≠ p ∧ p' ∉ bad⌝.
+  Lemma simulate_post_strong d (bad: gset tid) e:
+    ctx -∗ ACT (Post e)
+    ={E}=∗ ∃ (p': tid), ACT (Ctid p') ∗ p' ⤇ run: e ∗ spec_task_agree p' d ∗ ⌜p' ≠ p ∧ p' ∉ bad⌝.
   Proof.
     iIntros "ctx act".
-    iApply (simulate_local_step _ _ True with "ctx act [] []"); first done.
-    iIntros (h t e'' p_not_in_t) "[_ [heap [taskbuffer sched]]]".
+    iApply (simulate_local_step_full _ _ True with "ctx act [] []"); first done.
+    iIntros (h t e'' d' [p_not_in_t domd]) "[_ [heap [[taskbuffer sched] task_data]]]".
     set (pool := bad ∪ dom (gset tid) t ∪ {[ p ]}).
     set (p' := fresh pool).
     pose proof (is_fresh pool) as p'_fresh.
     iExists h, (<[p' := running e]>t), p'; iFrame.
-    iMod (own_update _ _
+    iMod (own_update _ (task_buffer_translate (<[p:=e'']>t))
                      (task_buffer_translate (<[p:=e'']>(<[p':=running e]>t)) ⋅ task_runnable p' e)
           with "taskbuffer")
       as "[$$]".
@@ -508,19 +590,33 @@ Section Simulation.
       rewrite lookup_insert_ne; last set_solver.
       rewrite lookup_fmap fmap_None -(not_elem_of_dom (D:=gset gname)).
       set_solver. }
+    change (ofe_car (leibnizC spec_task_data_t)) in d.
+    assert (p ≠ p') by set_solver.
+    iMod (own_update _ _ (●(<[p':=to_agree d]>d') ⋅ ◯{[p':=to_agree d]}) with "task_data")
+         as "[task_data task_agree]".
+    { apply auth_update_alloc, alloc_singleton_local_update; last done.
+      rewrite -(lookup_delete_ne d' p p'); last done.
+      rewrite -(not_elem_of_dom (D:=gset tid)).
+      clear -domd p'_fresh; set_solver. }
+    iModIntro.
+    iExists (<[p':=to_agree d]>d'); iFrame.
     iPureIntro.
-    split; first set_solver.
-    split; first constructor.
-    3: rewrite lookup_insert_ne.
-    1: rewrite -(not_elem_of_dom (D:=gset gname)).
-    all: set_solver.
+    repeat split; auto.
+    { clear -p'_fresh; set_solver. }
+    { constructor; auto.
+      rewrite -(not_elem_of_dom (D:=gset gname)); clear -p'_fresh; set_solver. }
+    { rewrite lookup_insert_ne; auto. }
+    { rewrite dom_delete !dom_insert.
+      rewrite dom_delete in domd *.
+      set_solver. }
   Qed.
 
-  Corollary simulate_post e:
-    ctx -∗ ACT (Post e) ={E}=∗ ∃ (p': tid), ACT (Ctid p') ∗ p' ⤇ run: e ∗ ⌜p' ≠ p⌝.
+  Corollary simulate_post (d: spec_task_data_t) e:
+    ctx -∗ ACT (Post e)
+    ={E}=∗ ∃ (p': tid), ACT (Ctid p') ∗ p' ⤇ run: e ∗ spec_task_agree p' d ∗ ⌜p' ≠ p⌝.
   Proof.
     iIntros "ctx act".
-    iMod (simulate_post_strong ∅ e with "ctx act") as (p') "[act [task %]]".
+    iMod (simulate_post_strong d ∅ e with "ctx act") as (p') "[act [task [agree %]]]".
     iModIntro; iExists p'; iFrame.
     iPureIntro; tauto.
   Qed.
@@ -555,8 +651,8 @@ Section Simulation.
   Proof.
     iIntros "ctx [taskp act] taskp'".
     iMod (inv_open_timeless with "ctx") as "[inv close]"; first done.
-    iDestruct "inv" as ([h t p'']) "[steps [heap [tasks sched]]]".
-    iDestruct "steps" as %steps.
+    iDestruct "inv" as ([h t p''] d) "[steps [[heap [tasks sched]] task_data]]".
+    iDestruct "steps" as %[steps domd].
     iAssert (⌜p'' = p⌝) with "[sched act]" as %->.
     { iPoseProof (own_valid_2 with "sched act") as "valid".
       rewrite uPred.discrete_valid auth_valid_discrete_2.
@@ -599,11 +695,14 @@ Section Simulation.
     { by apply auth_update, option_local_update, exclusive_local_update. }
     iFrame.
     iApply "close".
-    iExists (CFG h (<[p:=s]>t) p').
+    iExists (CFG h (<[p:=s]>t) p'), d.
     iFrame.
-    iPureIntro.
-    eapply rtc_r; eauto.
-    apply move; done.
+    iPureIntro; split.
+    { eapply rtc_r; eauto.
+      apply move; done. }
+    trans (dom (gset tid) t); first assumption.
+    rewrite /= dom_insert.
+    apply union_subseteq_r.
   Qed.
 
   Lemma simulate_wait_schedule p' p'' e:
@@ -628,10 +727,10 @@ Section Simulation.
 End Simulation.
 
 Section ExistentialTriple.
-  Context `{specStateG Σ, invG Σ, inG Σ heapR} (E: coPset) (c: cfg).
+  Context `{specStateG Σ, SpecTaskDataG Σ, invG Σ, inG Σ heapR, InitialConfiguration} (E: coPset).
   Definition existential_triple (ϕ: iProp Σ) e (ϕ': val → iProp Σ): iProp Σ :=
     (∀ p K,
-        spec_ctx c -∗ ϕ -∗ p ⤇ active: fill_ctx e K
+        spec_ctx -∗ ϕ -∗ p ⤇ active: fill_ctx e K
                                        ={E}=∗ ∃ v, ϕ' v ∗ p ⤇ active: fill_ctx (of_val v) K)%I.
   Global Instance existential_triple_proper:
     Proper ((⊢) --> (=) ==> pointwise_relation val (⊢) ==> (⊢)) existential_triple.

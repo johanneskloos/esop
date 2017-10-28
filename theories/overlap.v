@@ -1,3 +1,4 @@
+From mathcomp Require Import ssreflect.
 From stdpp Require Import fin_maps collections gmap coPset.
 
 Definition overlap `{Collection A C, FinMap A M} {B} (s: C) (m m': M B) :=
@@ -16,13 +17,20 @@ Qed.
 
 Infix "≡[ s ]≡" := (overlap s) (at level 70).
 
+Lemma overlap_sub `{Collection A C, FinMap A M} {B}
+  (s' s: C) (m m': M B): s ⊆ s' → m ≡[ s' ]≡ m' → m ≡[s]≡ m'.
+Proof.
+  intros sub.
+  apply overlap_mono; done.
+Qed.
+
 Lemma overlap_iff `{Collection A C, FinMap A M} {B} (s s': C) (m m' m'': M B)
       (sub: s' ⊆ s) (eqm: m' ≡[ s ]≡ m''):
   m ≡[ s' ]≡ m' ↔ m ≡[ s' ]≡ m''.
 Proof.
   enough (m' ≡[ s' ]≡ m'').
   { split; intro; etrans; done. }
-  eapply overlap_mono; eauto.
+  apply (overlap_sub s); done.
 Qed.
 
 Definition merge_along_loop `{FinMap A M} {B} (m: M B) k (m': M B) :=
@@ -36,7 +44,7 @@ Section Facts.
   Context `{FinCollection A C, FinMap A M}.
   Instance elem_of_dec_C (x: A) (s: C): Decision (x ∈ s) := elem_of_dec_slow x s.
 
-  Lemma merge_along_cases
+  Lemma lookup_merge_along_cases
         {B} (s: C) (m m': M B) (k: A):
     (m ~[s]~> m')!!k = if bool_decide (k ∈ s) then m!!k else m'!!k.
   Proof.
@@ -54,8 +62,8 @@ Section Facts.
       unfold merge_along_loop.
       destruct (decide (k = k')) as [<-|neq].
       + destruct (m!!k).
-        * by rewrite lookup_insert, bool_decide_true by set_solver.
-        * by rewrite lookup_delete, bool_decide_true by set_solver.
+        * rewrite lookup_insert bool_decide_true; set_solver.
+        * rewrite lookup_delete bool_decide_true; set_solver.
       + rewrite <-(bool_decide_iff (k ∈ s') (k ∈ {[k']} ∪ s')) by set_solver.
         rewrite <- IH.
         destruct (m!!k').
@@ -65,10 +73,10 @@ Section Facts.
 
   Lemma lookup_merge_along_in {B} (s: C) (m m': M B) (k: A) (ink: k ∈ s):
     (m ~[s]~> m')!!k = m!!k.
-  Proof. by rewrite merge_along_cases, bool_decide_true. Qed.
+  Proof. by rewrite lookup_merge_along_cases bool_decide_true. Qed.
   Lemma lookup_merge_along_not_in {B} (s: C) (m m': M B) (k: A) (ink: k ∉ s):
     (m ~[s]~> m')!!k = m'!!k.
-  Proof. by rewrite merge_along_cases, bool_decide_false. Qed.
+  Proof. by rewrite lookup_merge_along_cases bool_decide_false. Qed.
 
   Lemma overlap_merge_along_l {B} (s: C) (m m': M B):
     (m ~[s]~> m') ≡[ s ]≡ m.
@@ -93,7 +101,6 @@ Section Facts.
     - by rewrite !lookup_delete.
     - rewrite !lookup_delete_ne; auto.
   Qed.
-  
 End Facts.
 
 Lemma overlap_cast (s: gset positive) {B} (N N': gmap positive B):
@@ -103,3 +110,30 @@ Proof.
   setoid_rewrite elem_of_of_gset.
   done.
 Qed.
+
+Definition not_new A: coPset := ⊤ ∖ of_gset A.
+Lemma elem_of_not_new x A: x ∈ not_new A ↔ x ∉ A.
+Proof.
+  rewrite /not_new elem_of_difference elem_of_of_gset.
+  intuition; split.
+Qed.
+
+Lemma good_overlap A A': not_new (A ∪ A') ⊆ not_new A ∩ not_new A'.
+Proof.
+  intro ξ.
+  rewrite /not_new elem_of_intersection !elem_of_difference !elem_of_of_gset
+          not_elem_of_union.
+  tauto.
+Qed.
+
+Lemma overlap_trans {X} A A' (N N' N'': gmap positive X):
+  N ≡[not_new A]≡ N' → N' ≡[not_new A']≡ N'' →
+  N ≡[not_new (A ∪ A')]≡ N''.
+Proof.
+  intros ov1 ov2.
+  pose proof (good_overlap A A') as ov.
+  etrans.
+  all: eapply overlap_sub; last eassumption.
+  all: clear -ov; set_solver.
+Qed.
+

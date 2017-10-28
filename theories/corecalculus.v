@@ -385,3 +385,23 @@ Variant global_step: heap → task_buffer → tid → heap → task_buffer → t
     is_running t p' →
     global_step h t p h (<[p := done v]>t) p'.
 
+Definition reducible e := ∃ p T H e' T' H', head_step p e T H e' T' H'.
+Definition stuck e := ¬reducible e.
+Definition atomic e := reducible e ∧ ∀ p T H e' T' H', head_step p e T H e' T' H' → stuck e'.
+
+Lemma to_of_val v: to_val (of_val v) = Some v.
+Proof.
+  destruct v; first done.
+  rewrite /= decide_left; done.
+Qed.
+    
+Lemma of_to_val e v: to_val e = Some v → of_val v = e.
+Proof.
+  destruct e; try done.
+  - destruct v; last done.
+    injection 1 as <-; done.
+  - cbn.
+    destruct decide; simplify_eq 1.
+    intros <-; done.
+Qed.
+
