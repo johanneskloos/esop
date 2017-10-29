@@ -42,7 +42,7 @@ Definition Let b e e' := App (Rec BAnon b e') e.
 (* TODO - figure out how to get a nice notation working. *)
 Inductive typing: lnames → env → expr → hexpr → lnames → type → hexpr → Prop :=
 | tytrue U Γ: typing U Γ Ctrue ∅ ∅ Bool ∅
-| tyfalse U Γ: typing U Γ Ctrue ∅ ∅ Bool ∅
+| tyfalse U Γ: typing U Γ Cfalse ∅ ∅ Bool ∅
 | tyunit  U Γ: typing U Γ Cunit ∅ ∅ Unit ∅
 | tyvar U Γ (x: string) τ (Γx: Γ !! x = Some τ): typing U Γ x ∅ ∅ τ ∅
 | tylet U Γ (x: binder) η₁ η₂ η₃ τ₁ τ₂ A₁ A₂ e₁ e₂:
