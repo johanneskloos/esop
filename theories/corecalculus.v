@@ -20,11 +20,12 @@ Inductive expr :=
 | Wait (e: expr).
 Coercion Const: const >-> expr.
 Coercion Var: string >-> expr.
-Definition add' b (X: gset string) := match b with BNamed x => {[x]} ∪ X | BAnon => X end.
+Definition singleton' b: gset string := match b with BNamed x => {[x]} | BAnon => ∅ end.
+Notation "{[? b ]}" := (singleton' b).
 Inductive Closed: gset string → expr → Prop :=
 | const_closed X c: Closed X (Const c)
 | var_closed X x: x ∈ X → Closed X (Var x)
-| rec_closed X f x e: Closed (add' f (add' x X)) e → Closed X (Rec f x e)
+| rec_closed X f x e: Closed ({[? f]} ∪ {[? x ]} ∪ X) e → Closed X (Rec f x e)
 | app_closed X e₁ e₂: Closed X e₁ → Closed X e₂ → Closed X (App e₁ e₂)
 | if_closed X e₁ e₂ e₃: Closed X e₁ → Closed X e₂ → Closed X e₃ → Closed X (If e₁ e₂ e₃)
 | alloc_closed X e₁: Closed X e₁ → Closed X (Alloc e₁)
@@ -59,13 +60,13 @@ Proof.
   4,5,6: destruct (IH X e2); last by right; inversion_clear 1.
   5: destruct (IH X e3); last by right; inversion_clear 1.
   2: destruct (decide (x ∈ X)); last by right; inversion_clear 1.
-  3: destruct (IH (add' f (add' x X)) e); last by right; inversion_clear 1.
+  3: destruct (IH ({[? f]} ∪ {[? x ]} ∪ X) e); last by right; inversion_clear 1.
   all: by left; constructor.
 Defined.
 
 Variant val :=
 | VConst (c: const)
-| VRec (f x: binder) (e: expr) {e_closed: Closed (add' f (add' x ∅)) e}.
+| VRec (f x: binder) (e: expr) {e_closed: Closed ({[? f]} ∪ {[? x ]}) e}.
 Coercion VConst: const >-> val.
                                                                
 Variant ctx_item :=
@@ -98,7 +99,7 @@ Definition of_val v :=
 Definition to_val e :=
   match e with
   | Const c => Some (VConst c)
-  | Rec f x e => match decide (Closed (add' f (add' x ∅)) e) with
+  | Rec f x e => match decide (Closed ({[? f]} ∪ {[? x]}) e) with
                  | left H => Some (@VRec f x e H)
                  | right _ => None
                  end
@@ -167,17 +168,17 @@ Definition subst_ctx_item σ i :=
 Definition subst_ctx σ (K: list ctx_item) := subst_ctx_item σ <$> K.
 
 Local Opaque union.
-Lemma elem_of_add' x b X: x ∈ add' b X ↔ BNamed x = b ∨ x ∈ X.
+Lemma elem_of_singleton' b x: x ∈ {[? b ]} ↔ BNamed x = b.
 Proof.
-  destruct b; rewrite /= ?elem_of_union ?elem_of_singleton; intuition congruence.
+  destruct b; rewrite /= ?elem_of_singleton ?elem_of_empty;
+    intuition congruence.
 Qed.
 Lemma lookup_delete' {A} b (v: A) m x: delete' b m !! x = Some v ↔ BNamed x ≠ b ∧ m !! x = Some v.
-Proof.
-  destruct b as [|y]; rewrite /=.
-  - intuition congruence.
-  - destruct (decide (x=y)) as [<-|neq].
-    + rewrite lookup_delete; intuition congruence.
-    + rewrite lookup_delete_ne; intuition congruence.
+Proof with try intuition congruence.
+  destruct b as [|y]; rewrite /=...
+  destruct (decide (x=y)) as [<-|neq].
+  - rewrite lookup_delete...
+  - rewrite lookup_delete_ne...
 Qed.
 Lemma lookup_delete'_None {A} b (m: gmap string A) x:
   delete' b m !! x = None ↔ BNamed x = b ∨ m!!x = None.
@@ -208,7 +209,7 @@ Proof.
   all: rewrite /= ?IHClosed ?IHClosed1 ?IHClosed2 ?IHClosed3; auto.
   - rewrite disj //.
   - intros y.
-    rewrite !elem_of_add' !lookup_delete'_None.
+    rewrite !elem_of_union !elem_of_singleton' !lookup_delete'_None.
     intuition.
 Qed.
 
@@ -218,8 +219,14 @@ Proof.
   set_solver.
 Qed.
 
+Instance Closed_proper: Proper ((≡) ==> eq ==> iff) Closed.
+Proof. by intros ?? <-%leibniz_equiv ?? <-. Qed.
+
 Lemma val_closed v: Closed ∅ (of_val v).
-Proof. by destruct v; constructor. Qed.
+Proof.
+  destruct v; constructor.
+  rewrite right_id; done.
+Qed.
 
 Corollary subst_val v σ: subst σ (of_val v) = of_val v.
 Proof. apply subst_closed_empty, val_closed. Qed.
@@ -240,8 +247,7 @@ Proof.
   induction closed; eauto.
   intros; constructor.
   apply IHclosed.
-  intro; rewrite !elem_of_add'.
-  intuition.
+  clear -sub; set_solver.
 Qed.
 
 Lemma closed_subst X e: Closed X e → ∀ σ (closed: ∀ x e, x ∈ X → σ !! x = Some e →
@@ -255,13 +261,13 @@ Proof.
   - constructor.
     apply IHClosed.
     intros x' e'.
-    rewrite !elem_of_add' !lookup_delete'.
-    intros [?|[?|inx']].
+    rewrite !elem_of_union !elem_of_singleton' !lookup_delete'.
+    intros [[?|?]|inx'].
     1,2: tauto.
     intros [_ [_ mt]].
     generalize (closed x' e' inx' mt).
     apply closed_mono; auto.
-    intro; rewrite !elem_of_add'; auto.
+    clear; set_solver.
 Qed.
 
 Lemma closed_subst_val X e σ: Closed X e → Closed X (subst (of_val <$> σ) e).
