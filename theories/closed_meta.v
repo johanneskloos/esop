@@ -1,6 +1,6 @@
 From iris.proofmode Require Import tactics.
 From iris.base_logic.lib Require Import invariants.
-From esop Require Import overlap delayed specification typetranslation types corecalculus.
+From esop Require Import overlap delayed specification typetranslation types corecalculus exprfacts.
 From stdpp Require Import gmap coPset.
 
 Section Theory.
@@ -350,20 +350,26 @@ Section Theory.
     set_solver.
   Qed.
 
-  
   Lemma bind_existential_part (x: string) e K Γ τ₁ τ₂ η₁ η₂ η₃ A₁ A₂ (D₁ D₂ D₃: conn_map) d
         (d_good: D₂!!RET = Some d) (Γ_names_good: names Γ ⊥ A₁)
-        (x_fresh: ∀ e', subst_ctx (<[x:=e']>∅) K = K):
+        (x_fresh: ∀ e', subst_ectx (<[x:=e']>∅) K = K)
+        (K_quasictx: reduced_ectx (dom _ Γ) K):
     simulation Γ e η₁ A₁ τ₁ η₂ D₁ D₂
-               -∗ simulation (<[x:=τ₁]>Γ) (fill_gctx x K) η₂ A₂ τ₂ η₃
+               -∗ simulation (<[x:=τ₁]>Γ) (fill_ectx x K) η₂ A₂ τ₂ η₃
                (strengthen Γ x d D₁ D₂) D₃
-               -∗ simulation Γ (fill_gctx e K) η₁ (A₁ ∪ A₂) τ₂ η₃ D₁ D₃.
+               -∗ simulation Γ (fill_ectx e K) η₁ (A₁ ∪ A₂) τ₂ η₃ D₁ D₃.
   Proof.
     iIntros "sime simK".
     iIntros (N σ p K') "#ctx [#Γ pre] step".
-    rewrite subst_fill fill_ctx_app.
-    iMod ("sime" $! N σ p (subst_ctx (of_val <$> σ) K++K')
-          with "ctx [$Γ $pre] step") as (v₁) "[post step]".
+    rewrite (subst_fill_ectx (dom _ Γ)); last done.
+    iAssert (⌜∀ x, is_Some (Γ !! x) ↔ is_Some (σ !! x)⌝)%I as %eqdom.
+    { iDestruct "Γ" as "[[$ _] _]". }
+    assert (dom (gset string) Γ = dom (gset string) σ) as eqdom'.
+    { apply leibniz_equiv; intro y;  by rewrite !elem_of_dom. }
+    assert (is_Some (of_ectx (subst_ectx (of_val <$> σ) K))) as [Kσ eqKσ].
+    { by apply reduced_ectx_of_ectx, reduced_subst_ectx_val; rewrite -eqdom'. }
+    rewrite (fill_of_ectx _ _ eqKσ) fill_ctx_app.
+    iMod ("sime" $! N σ p (Kσ ++ K') with "ctx [$Γ $pre] step") as (v₁) "[post step]".
     iDestruct "post" as (d' N') "[props [ty pre]]".
     iDestruct "props" as %[eqN eqd].
     replace d' with d in * by congruence.
@@ -382,11 +388,13 @@ Section Theory.
         intros []%Γ_names_good; done. }
       apply overlap_cast, (overlap_sub (not_new A₁)); auto.
     }
-    rewrite -fill_ctx_app -(subst_val v₁ (of_val <$> σ)) -subst_fill.
+    rewrite -fill_ctx_app -(fill_of_ectx _ _ eqKσ).
+    rewrite -(subst_val v₁ (of_val <$> σ)) -(subst_fill_ectx _ _ _ _ K_quasictx).
     iMod ("simK" $! N' (<[x := v₁]>σ) p K' with "ctx [$Γ' $pre] [step]")
       as (v₂) "[post step]".
     { rewrite fmap_insert subst_insert_r; auto using val_closed.
-      rewrite (subst_fill (<[x:=of_val v₁]>∅)) x_fresh /= lookup_insert //. }
+      rewrite !(subst_fill_ectx _ _ _ _ K_quasictx) /= lookup_insert.
+      rewrite -!(subst_fill_ectx _ _ _ _ K_quasictx) x_fresh //. }
     iDestruct "post" as (d'' N'') "[eqs post]".
     iModIntro.
     iExists v₂; iFrame.
@@ -398,25 +406,30 @@ Section Theory.
 
   Lemma bind_universal_part (x: string) e e' K K' Γ τ₁ τ₂ η₁ η₂ η₃ A₁ A₂
         (Γ_names_good: names Γ ⊥ A₁)
-        (x_fresh: ∀ e', subst_ctx (<[x:=e']>∅) K = K)
-        (x_fresh': ∀ e', subst_ctx (<[x:=e']>∅) K' = K'):
+        (x_fresh: ∀ e', subst_ectx (<[x:=e']>∅) K = K)
+        (x_fresh': ∀ e', subst_ectx (<[x:=e']>∅) K' = K')
+        (K_quasictx: reduced_ectx (dom _ Γ) K) (K'_quasictx: reduced_ectx (dom _ Γ) K'):
     delayed_typed Γ η₁ e e' A₁ τ₁ η₂
-                  -∗ delayed_typed (<[x:=τ₁]>Γ) η₂ (fill_ctx x K) (fill_ctx x K') A₂ τ₂ η₃
-                  -∗ delayed_typed Γ η₁ (fill_ctx e K) (fill_ctx e' K') (A₁ ∪ A₂) τ₂ η₃.
+                  -∗ delayed_typed (<[x:=τ₁]>Γ) η₂ (fill_ectx x K) (fill_ectx x K') A₂ τ₂ η₃
+                  -∗ delayed_typed Γ η₁ (fill_ectx e K) (fill_ectx e' K') (A₁ ∪ A₂) τ₂ η₃.
   Proof.
     iIntros "dele delK".
     iIntros (D Ni σi) "[#intΓ intη]".
-    rewrite subst_fill.
+    rewrite (subst_fill_ectx _ _ _ _ K_quasictx).
+    iAssert (⌜∀ x, is_Some (Γ !! x) ↔ is_Some (σi !! x)⌝)%I as %eqdom.
+    { iDestruct "intΓ" as "[[$ _] _]". }
+    assert (dom (gset string) Γ = dom (gset string) σi) as eqdom'.
+    { apply leibniz_equiv; intro y;  by rewrite !elem_of_dom. }
+    assert (is_Some (of_ectx (subst_ectx (of_val <$> σi) K))) as [Kσ eqKσ].
+    { by apply reduced_ectx_of_ectx, reduced_subst_ectx_val; rewrite -eqdom'. }
+    rewrite (fill_of_ectx _ _ eqKσ).
     iApply wp_bind.
     iSpecialize ("dele" $! D Ni σi with "[$intΓ $intη]").
     iApply (wp_wand with "dele [-]").
     iIntros (v) "post".
     iDestruct "post" as (Ni' D' d') "[rel [intτ [#sim intη']]]".
-    replace (fill_ctx (of_val v) (subst_ctx (of_val <$> σi) K))
-    with (subst (of_val <$> (<[x:=v]>σi)) (fill_ctx x K)); cycle 1.
-    { rewrite fmap_insert subst_insert_r; auto using val_closed.
-      rewrite subst_fill /= lookup_insert x_fresh -(subst_val _ (of_val <$> σi)) -subst_fill.
-      rewrite subst_val //. }
+    rewrite -(fill_of_ectx _ _ eqKσ) -(subst_val v (of_val <$> σi)).
+    rewrite -(subst_fill_ectx _ _ _ _ K_quasictx).
     iDestruct "rel" as %[eqN eqd].
     iSpecialize ("delK" $! (strengthen Γ x d' D D') Ni' (<[x:=v]>σi) with "[intτ intη']").
     { iApply (strengthen_env_generic
@@ -434,6 +447,19 @@ Section Theory.
         { intro ξ; rewrite elem_of_of_gset elem_of_not_new; exact (Γ_names_good ξ). }
         apply overlap_cast, (overlap_sub (not_new A₁)); auto.
     }
+    assert ((of_val <$> (<[x:=v]>σi)) = subst_merge (of_val <$> σi) (<[x:=of_val v]>∅)) as ->.
+    { apply map_eq; intro y.
+      rewrite lookup_fmap /subst_merge lookup_merge /subst_merge'.
+      destruct (decide (x=y)) as [<-|neq].
+      - by rewrite !lookup_insert subst_val.
+      - rewrite !lookup_insert_ne; auto.
+        rewrite lookup_empty lookup_fmap //. }
+    rewrite -subst_subst.
+    rewrite (subst_fill_ectx _ _ _ _ K_quasictx) /= lookup_insert x_fresh.
+    2: intros x'' e''.
+    2: rewrite lookup_insert_Some lookup_empty => [[[??]|[??]]].
+    3: discriminate.
+    2: subst; apply val_closed.
     iApply (wp_wand with "delK").
     iIntros (v') "post".
     iDestruct "post" as (Ni'' D'' d'') "[pure [intτ [#sim' intη]]]".
@@ -445,6 +471,75 @@ Section Theory.
     iApply (bind_existential_part with "sim sim'"); auto.
   Qed.
 
+  Lemma delayed_bind_strong 
+        (x: string) e e' K K' Γ τ₁ τ₂ η₁ η₂ η₃ U A₁ A₂
+        (x_fresh: ∀ e', subst_ectx (<[x:=e']>∅) K = K)
+        (x_fresh': ∀ e', subst_ectx (<[x:=e']>∅) K' = K')
+        (K_quasictx: reduced_ectx (dom _ Γ) K) (K'_quasictx: reduced_ectx (dom _ Γ) K')
+        (dele: delayed_simulation U Γ η₁ e e' A₁ τ₁ η₂)
+        (delK: delayed_simulation (U ∪ A₁) (<[x:=τ₁]>Γ) η₂ (fill_ectx x K) (fill_ectx x K') A₂ τ₂ η₃):
+    delayed_typed Γ η₁ (fill_ectx e K) (fill_ectx e' K') (A₁ ∪ A₂) τ₂ η₃.
+  Proof.
+    destruct dele as [namese tye tye' dele].
+    destruct delK as [namesK tyK tyK' delK].
+    iApply bind_universal_part.
+    2,3,4,5: done.
+    2: iApply dele.
+    2: iApply delK.
+    apply typing_good_names in tye.
+    - symmetry.
+      intros ξ inA inΓ.
+      eapply tye; first apply inA.
+      apply namese, union_subseteq_l, inΓ.
+    - etrans; last done.
+      apply union_subseteq_l.
+    - etrans; last done.
+      apply union_subseteq_r.
+  Qed.
+
+  Lemma subst_ectx_item_to_ectx_item σ i:
+    subst_ectx_item σ (to_ectx_item i) =
+    to_ectx_item (subst_ctx_item σ i).
+  Proof.
+    destruct i; try done.
+    all: rewrite /= subst_val //.
+  Qed.
+
+  Lemma subst_ectx_to_ectx σ K:
+    subst_ectx σ (to_ectx K) = to_ectx (subst_ctx σ K).
+  Proof.
+    induction K as [|i K IH]; first done.
+    rewrite /= IH subst_ectx_item_to_ectx_item //.
+  Qed.
+
+  Lemma to_ectx_reduced K: reduced_ectx ∅ (to_ectx K).
+  Proof.
+    induction K as [|i K IH]; cbn; constructor; auto.
+    apply to_ectx_item_reduced.
+  Qed.
+
+  Lemma Closed_reduced X e: reduced X e → Closed X e.
+  Proof. by destruct 1; constructor. Qed.
+  
+  Lemma reduced_mono X X' e: X ⊆ X' → reduced X e → reduced X' e.
+  Proof.
+    intros sub red.
+    apply (reduced_closed X); auto using Closed_reduced.
+    eapply (closed_mono X); eauto using Closed_reduced.
+  Qed.
+
+  Lemma reduced_ectx_item_mono X X' i: X ⊆ X' → reduced_ectx_item X i → reduced_ectx_item X' i.
+  Proof.
+    intro sub.
+    destruct 1; constructor.
+    all: eauto using reduced_mono.
+  Qed.
+
+  Lemma reduced_ectx_mono X X' K: X ⊆ X' → reduced_ectx X K → reduced_ectx X' K.
+  Proof.
+    induction 2; constructor; eauto using reduced_ectx_item_mono.
+  Qed.
+  
   Lemma delayed_bind
         (x: string) e e' K K' Γ τ₁ τ₂ η₁ η₂ η₃ U A₁ A₂
         (x_fresh: ∀ e', subst_ctx (<[x:=e']>∅) K = K)
@@ -453,15 +548,17 @@ Section Theory.
         (delK: delayed_simulation (U ∪ A₁) (<[x:=τ₁]>Γ) η₂ (fill_ctx x K) (fill_ctx x K') A₂ τ₂ η₃):
     delayed_typed Γ η₁ (fill_ctx e K) (fill_ctx e' K') (A₁ ∪ A₂) τ₂ η₃.
   Proof.
-    destruct dele as [namese tye tye' dele].
-    destruct delK as [namesK tyK tyK' delK].
-    iApply bind_universal_part.
-    2,3: done.
-    2: iApply dele.
-    2: iApply delK.
-    apply typing_good_names in tye.
-    2,3: clear -namese; set_solver.
-    set_solver.
+    pose proof (fill_of_ectx (to_ectx K) K (of_to_ectx K)) as fillK.
+    pose proof (fill_of_ectx (to_ectx K') K' (of_to_ectx K')) as fillK'.
+    rewrite -fillK -fillK'.
+    apply delayed_bind_strong with (x:=x) (τ₁:=τ₁) (η₂:=η₂) (U:=U); auto.
+    - intro e''; rewrite subst_ectx_to_ectx x_fresh //.
+    - intro e''; rewrite subst_ectx_to_ectx x_fresh' //.
+    - apply (reduced_ectx_mono ∅), to_ectx_reduced.
+      clear; set_solver.
+    - apply (reduced_ectx_mono ∅), to_ectx_reduced.
+      clear; set_solver.
+    - by rewrite fillK fillK'.
   Qed.
 
 End Theory.
