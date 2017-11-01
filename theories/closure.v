@@ -659,3 +659,52 @@ Section FullClosure.
     subst; done.
   Qed.
 End FullClosure.
+
+Theorem fundamental `{allG Σ} U Γ e η A τ η':
+  heap_wf U η →
+  names Γ ⊆ U →
+  typing U Γ e η A τ η' →
+  delayed_simulation U Γ η e e A τ η'.
+Proof.
+  intros wf_pre good_env.
+  induction 1.
+  - by apply closure_true.
+  - by apply closure_false.
+  - by apply closure_unit.
+  - by apply closure_var.
+  - eapply closure_let; eauto.
+    apply IHtyping2.
+    + by eapply typing_wf.
+    + intros ξ [inξ|inξ]%elem_of_names_env_insert'.
+      2: by apply elem_of_union_l, good_env.
+      destruct (typing_good_names U Γ e₁ η₁ τ₁ η₂ A₁) as [_ [sub _]]; auto.
+      1: by apply heap_wf_names.
+  - assert (names Γ ⊆ U ∪ A₁).
+    { etrans; first apply good_env.
+      apply union_subseteq_l. }
+    assert (heap_wf (U ∪ A₁) η₂).
+    { by eapply typing_wf. }
+    eapply closure_if; eauto.
+  - apply closure_ref; auto.
+  - apply closure_read; auto.
+  - assert (names Γ ⊆ U ∪ A₁).
+    { etrans; first apply good_env.
+      apply union_subseteq_l. }
+    assert (heap_wf (U ∪ A₁) η₂).
+    { by eapply typing_wf. }
+    eapply closure_write; eauto.
+  - apply closure_post; auto.
+  - eapply closure_wait; eauto.
+  - assert (heap_wf U η₁).
+    { by inversion_clear wf_pre. }
+    apply closure_frame; auto.
+    inversion_clear wf_pre; done.
+  - eapply closure_weaken; eauto.
+    apply IHtyping; auto.
+    eapply strengthen_heap_wf; eauto.
+  - eapply closure_proper; last apply IHtyping.
+    all: eauto.
+    + by rewrite eqU.
+    + by rewrite eqU eqη₁.
+    + by rewrite eqU.
+Qed.
