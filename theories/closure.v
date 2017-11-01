@@ -607,5 +607,55 @@ Section FullClosure.
       intros ?? []%lookup_empty_Some. }
     by iApply closed_wait.
   Qed.
-  
+
+  Lemma closure_frame e e' (η₁ η₂: hexpr) (τ: type) A (ηf: hexpr)
+        (disj₁: res_names η₁ ⊥ res_names ηf)
+        (disj₂: res_names η₂ ⊥ res_names ηf)
+        (disjA: A ⊥ names ηf)
+        (wf_post: heap_wf (U ∪ A) ηf):
+    heap_wf U ηf →
+    delayed_simulation U Γ η₁ e e' A τ η₂ →
+    delayed_simulation U Γ (η₁ ⊗ ηf) e e' A τ (η₂ ⊗ ηf).
+  Proof.
+    intros wf_pre [good tye tye' del].
+    split.
+    2,3: by apply tyframe.
+    { rewrite union_assoc.
+      apply union_least; auto.
+      apply heap_wf_names in wf_pre; done. }
+    iApply closed_frame; auto.
+    iApply del.
+  Qed.
+
+  Lemma closure_weaken e e' (η₁ η₂: hexpr) A τ U' Γ' A'
+        (namesΓ: names Γ' ⊆ U') (namesη₁: names η₁ ⊆ U')
+        (disj: U ⊥ A) (subU: U' ⊆ U) (subΓ: Γ' ⊆ Γ) (subA: A' ⊆ A)
+        (wf: heap_wf (A ∪ U) η₂):
+    delayed_simulation U' Γ' η₁ e e' A' τ η₂ →
+    delayed_simulation U Γ η₁ e e' A τ η₂.
+  Proof.
+    intros [good tye tye' del].
+    split.
+    { apply union_least; auto.
+      etrans; done. }
+    1,2: eapply (tyweaken U' Γ'); eassumption.
+    iApply closed_strengthen.
+    5: iApply del.
+    all: done.
+  Qed.
+
+  Lemma closure_proper (U': lnamesC) (η₁ η₁': hexpr) e e' (A A': lnames) τ (η₂ η₂': hexpr)
+        (eqU: (U: lnamesC) ≡ U') (eqη₁: η₁ ≡ η₁') (eqA: A ≡ A') (eqη₂: η₂ ≡ η₂'):
+    delayed_simulation U Γ η₁ e e' A τ η₂ →
+    delayed_simulation U' Γ η₁' e e' A' τ η₂'.
+  Proof.
+    intros [good tye tye' del].
+    split.
+    2,3: by eapply typroper.
+    { by rewrite -eqU -eqη₁. }
+    rewrite -eqη₁ -eqη₂.
+    apply leibniz_equiv in eqA.
+    apply leibniz_equiv in eqU.
+    subst; done.
+  Qed.
 End FullClosure.
