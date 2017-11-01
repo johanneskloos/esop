@@ -15,6 +15,7 @@ Definition subst_ectx_item σ i :=
   | EWriteR e => EWriteR (subst σ e)
   | EWait => EWait
   | EPost => EPost
+  | ERec f x => ERec f x
   end.
 Definition subst_ectx σ (K: list ectx_item) := subst_ectx_item σ <$> K.                         
 
@@ -31,6 +32,7 @@ Definition of_ectx_item i :=
   | EWriteR e => CWriteR <$> to_val e
   | EWait => Some CWait
   | EPost => None
+  | ERec f x => None
   end.
 Fixpoint of_ectx K :=
   match K return option (list ctx_item) with
