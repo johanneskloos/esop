@@ -89,6 +89,7 @@ Variant ectx_item :=
 | ERead
 | EWriteL (e': expr)
 | EWriteR (e: expr)
+| EPost
 | EWait.
 
 Definition of_val v :=
@@ -129,6 +130,7 @@ Definition fill_ectx_item e c :=
   | ERead => Read e
   | EWriteL e' => Write e e'
   | EWriteR e' => Write e' e
+  | EPost => Post e
   | EWait => Wait e
   end.
 Definition fill_ctx := foldl fill_ctx_item.
