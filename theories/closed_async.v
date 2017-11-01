@@ -272,7 +272,7 @@ Section Theory.
     all: iDestruct "pre" as (Npre') "[env [pre [agreeNpre' Npreη]]]".
     { iDestruct "pre" as "[]". }
     rewrite taskξ taskξD.
-    iDestruct "names" as %[[=<-] [[=<-] [<- ->]]].
+    iDestruct "names" as %[[=<-] [[=<-] [eqη ->]]].
     iDestruct (task_agree_eq with "agreeU agreeU'") as %<-; iClear "agreeU'".
     iDestruct (spec_task_agree_eq with "agreePre agreeNpre'") as %<-.
     iSpecialize ("sim" $! Npre σ' ts [] with "ctx [$env pre]").
@@ -311,13 +311,15 @@ Section Theory.
       rewrite lookup_merge_along_not_in; last done.
       rewrite -(Npreτ ξ') ?elem_of_difference; last done.
       rewrite (Npre' ξ') ?elem_of_not_new; done.
-    - iApply (int_s_heap_local with "heap").
+    - rewrite (int_s_heap_proper _ _ eqη).
+      iApply (int_s_heap_local with "heap").
       1: done.
       intros ξ' inξ'.
       destruct (decide (ξ' ∈ td_alloc U)) as [case|case].
       { by rewrite lookup_merge_along_in. }
       rewrite lookup_merge_along_not_in; last done.
-      rewrite -(Npreη ξ') ?elem_of_difference; last done.
+      rewrite -(Npreη ξ') ?elem_of_difference.
+      2: by rewrite eqη.
       rewrite (Npre' ξ') ?elem_of_not_new; done.
   Qed.
 End Theory.

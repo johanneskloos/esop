@@ -171,7 +171,7 @@ Section Theory.
   Qed.
 
   (** Closure: Let *)
-  Lemma closed_let x y Γ η A τ τ' η' e e' (x_type: Γ !! x = Some τ) (y_fresh: Γ !! y = None):
+  Lemma closed_let x y Γ η A τ τ' η' e e' (x_type: Γ !! x = Some τ):
     delayed_typed (<[y:= τ]> Γ) η e e' A τ' η' -∗
                   delayed_typed Γ η (Let (BNamed y) x e) (Let (BNamed y) x e') A τ' η'.
   Proof.
@@ -277,6 +277,41 @@ Section Theory.
         rewrite elem_of_conn_heap.
         intros [ξ [-> _]].
         apply lookup_insert_ne; done. }
+    iApply "sim"; auto.
+  Qed.
+
+  Lemma closed_let_anon x Γ η A τ τ' η' e e' (x_type: Γ !! x = Some τ):
+    delayed_typed Γ η e e' A τ' η' -∗
+                  delayed_typed Γ η (Let BAnon x e) (Let BAnon x e') A τ' η'.
+  Proof.
+    iIntros "del".
+    iIntros (D N σ) "[#env pre]".
+    iPoseProof ("env") as "[env_names env_types]".
+    iDestruct "env_names" as %[domσ domD].
+    assert (is_Some (σ !! x)) as [v val_x].
+    { apply domσ; rewrite x_type; eauto. }
+    assert (is_Some (D !! var x)) as [d conn_x].
+    { apply domD; rewrite x_type; eauto. }
+    rewrite /= lookup_fmap val_x /=.
+    iApply wp_app; first apply to_of_val.
+    rewrite /=.
+    iSpecialize ("del" $! D N σ with "[$env $pre]").
+    iApply (wp_wand with "del").
+    iIntros (w) "post".
+    iDestruct "post" as (N' D' d') "[eqs [ty [#sim heap]]]".
+    iExists N', D', d'; iFrame.
+    iClear "env env_types".
+    clear v val_x N' d' w σ domσ N.
+    iAlways.
+    iIntros (N σ p K) "#ctx [#env pre] move".
+    cbn -[difference].
+    iPoseProof ("env") as "[env_names env_types]".
+    iDestruct "env_names" as %[domσ _].
+    assert (is_Some (σ !! x)) as [v val_x].
+    { apply domσ; rewrite x_type; eauto. }
+    rewrite /= lookup_fmap val_x /=.
+    iMod (simulate_app with "ctx move") as "move"; eauto using to_of_val.
+    iSpecialize ("sim" $! N σ with "ctx [$env $pre]").
     iApply "sim"; auto.
   Qed.
 End Theory.

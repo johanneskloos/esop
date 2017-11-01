@@ -1,0 +1,58 @@
+From esop Require Import types.
+From stdpp Require Import prelude gmap.
+
+
+Lemma typing_wf `(ty: typing U Γ e η A τ η'): names Γ ⊆ U → names η ⊆ U → heap_wf (U ∪ A) η'.
+Proof.
+  induction ty; intros goodΓ goodη.
+  1-4: constructor.
+  - apply typing_good_names in ty1; auto.
+    destruct ty1 as [disj [subτ subη]].
+    rewrite union_assoc_L.
+    apply IHty2; last done.
+    intros ξ' [?|?]%elem_of_names_env_insert'; auto.
+    apply elem_of_union_l; auto.
+  - apply typing_good_names in ty1; auto.
+    destruct ty1 as [disj [subτ subη]].
+    rewrite union_assoc_L.
+    apply IHty2; last done.
+    etrans; first done.
+    apply union_subseteq_l.
+  - rewrite union_assoc_L.
+    apply typing_good_names in ty; auto.
+    destruct ty as [disj [subτ subη]].
+    constructor.
+    + cbn; apply disjoint_singleton_r; contradict ξ_fresh.
+      apply subη, res_names_sub_names, ξ_fresh.
+    + specialize (IHty goodΓ goodη).
+      assert (ξ ∉ names η₂) as ξnotin.
+      { contradict ξ_fresh; auto. }
+      revert IHty ξ_fresh ξnotin.
+      generalize (U ∪ A) as Ξ.
+      clear.
+      rename ξ into ξ'.
+      induction 1; intros.
+      * constructor.
+      * cbn in ξnotin.
+        rewrite not_elem_of_union in ξnotin; destruct ξnotin.
+        constructor; auto.
+      * constructor.
+        -- by apply elem_of_union_l.
+        -- etrans; first done. apply union_subseteq_l.
+      * constructor.
+        -- by apply elem_of_union_l.
+        -- done.
+        -- apply disjoint_union_l; split; auto.
+           apply disjoint_singleton_l.
+           cbn -[union] in *.
+           
+           
+        --
+    +
+  -
+  -
+  -
+  -
+  -
+  -
+Qed.

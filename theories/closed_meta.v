@@ -16,7 +16,7 @@ Section Theory.
             int_he (hstar η ηf) D'' N'' ⊣⊢ int_he η D'' N'' ∗ int_he ηf D'' N'')
         (int_he_local: ∀ η,
             Proper (overlap (conn_heap η) ==> overlap (names η) ==> (≡)) (int_he η))
-        (disj: names η ⊥ names ηf):
+        (disj: res_names η ⊥ res_names ηf):
     int_he ηf D N -∗ (⌜D' !! RET = Some d⌝ ∗ int_ty τ d N' v ∗ int_he η D' N') -∗
            (⌜frame ηf D D' !! RET = Some d⌝) ∗
            int_ty τ d N' v ∗ int_he (hstar η ηf) (frame ηf D D') N'.
@@ -35,7 +35,8 @@ Section Theory.
       apply overlap_merge_along_r.
       intro ξ.
       rewrite !elem_of_conn_heap => [[ξ₁ [eq₁ in₁]] [ξ₂ [eq₂ in₂]]]; subst.
-      injection eq₂ as <-; apply (disj ξ₁); done.
+      injection eq₂ as <-.
+      apply (disj ξ₁); done.
     - by iApply (int_he_local with "frame"); first apply overlap_merge_along_l.
   Qed.
 
@@ -65,7 +66,8 @@ Section Theory.
   Qed.
   
   Lemma frame_existential Γ e (η: hexpr) A τ (η': hexpr) D D' D'' (ηf: hexpr)
-        (disj': names η' ⊥ names ηf) (disj: names η ⊥ names ηf) (disj'': names ηf ⊥ A):
+        (disj': res_names η' ⊥ res_names ηf) (disj: res_names η ⊥ res_names ηf)
+        (disj'': names ηf ⊥ A):
     simulation Γ e η A τ η' D D' -∗
                simulation Γ e (hstar η ηf) A τ (hstar η' ηf) (frame ηf D'' D)
                (frame ηf D'' D').
@@ -140,7 +142,9 @@ Section Theory.
   Qed.
   
   Lemma closed_frame Γ e e' (η: hexpr) A τ (η' ηf: hexpr)
-        (disj': names η' ⊥ names ηf) (disj: names η ⊥ names ηf) (disj'': names ηf ⊥ A):
+        (disj': res_names η' ⊥ res_names ηf)
+        (disj: res_names η ⊥ res_names ηf)
+        (disj'': names ηf ⊥ A):
     delayed_typed Γ η e e' A τ η' -∗
                   delayed_typed Γ (hstar η ηf) e e' A τ (hstar η' ηf).
   Proof.
@@ -228,21 +232,41 @@ Section Theory.
     - by rewrite /restrict_subst lookup_merge eqτ in eqv.
   Qed.
 
+  Lemma typing_closed U Γ e η A τ η': typing U Γ e η A τ η' → Closed (dom _ Γ) e.
+  Proof.
+    induction 1; try constructor; auto.
+    - rewrite elem_of_dom Γx; eauto.
+    - constructor; auto.
+      destruct x; rewrite /= !left_id; auto.
+      rewrite -(dom_insert Γ x τ₁) //.
+    - eapply (closed_mono (dom _ Γ)); try done.
+      apply subseteq_dom; done.
+  Qed.
+  
+  Lemma subst_local X e: Closed X e → ∀ σ σ', (∀ x, x ∈ X → σ!!x = σ'!!x) → subst σ e = subst σ' e.
+  Proof.
+    induction 1; intros ?? local; rewrite /= //.
+    all: try rewrite ?(IHClosed _ σ') // (IHClosed1 _ σ') // (IHClosed2 _ σ') // (IHClosed3 _ σ') //.
+    - by rewrite local.
+    - rewrite (IHClosed _ (delete' f (delete' x σ'))) //.
+      intros y.
+      rewrite !elem_of_union !elem_of_singleton' !lookup_delete'_cases.
+      destruct (bool_decide_reflect (BNamed y ≠ f)) as [neqf|<-%dec_stable]; last done.
+      destruct (bool_decide_reflect (BNamed y ≠ x)) as [neqx|<-%dec_stable]; last done.
+      intros [[?|?]|iny].
+      1,2: contradiction.
+      apply local; done.
+  Qed.
+  
   Lemma subst_restrict_with_type `(ty: typing U Γ e η A τ η'):
     ∀ σ, subst (restrict_subst Γ σ) e = subst σ e.
   Proof.
-    induction ty; intros; cbn.
-    1,2,3,6,7,8,9: congruence.
-    - by rewrite /restrict_subst lookup_merge Γx.
-    - rewrite IHty1; do 2 f_equal.
-      rewrite -(IHty2 (delete' x σ)); f_equal.
-      apply map_eq; intro y.
-      rewrite lookup_delete'_cases /restrict_subst !lookup_merge lookup_delete'_cases.
-      destruct (bool_decide_reflect (BNamed y ≠ x)) as [neqx|<-%dec_stable].
-      + rewrite /restrict_subst' /insert'.
-        destruct x; first done.
-        rewrite lookup_insert_ne; congruence.
-      + by destruct (insert' (BNamed y) τ₁ Γ !! y).
+    intro.
+    apply (subst_local (dom _ Γ)).
+    - by eapply typing_closed.
+    - intros x inx%elem_of_dom.
+      rewrite /restrict_subst lookup_merge /restrict_subst'.
+      destruct inx as [? ->]; done.
   Qed.
 
   Lemma restrict_env_fmap `(f: A → B) Γ m:

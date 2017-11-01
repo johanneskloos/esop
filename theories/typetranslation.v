@@ -26,9 +26,9 @@ Definition conn_map := gmap conn_name val.
 Definition intT_type {Σ} := val → name_map → val → iProp Σ.
 Definition intT_heap {Σ} := conn_map → name_map → iProp Σ.
 
-Definition conn_heap (η: hexpr): gset conn_name := of_list (name <$> (elements (names η))).
+Definition conn_heap (η: hexpr): gset conn_name := of_list (name <$> (elements (res_names η))).
 Lemma elem_of_conn_heap (d: conn_name) η:
-  (d ∈ conn_heap η ↔ ∃ ξ: gname, d = name ξ ∧ ξ ∈ names η)%type.
+  (d ∈ conn_heap η ↔ ∃ ξ: gname, d = name ξ ∧ ξ ∈ res_names η)%type.
 Proof.
   rewrite /conn_heap elem_of_of_list elem_of_list_fmap.
   f_equiv; intro ξ. by rewrite elem_of_elements.
@@ -168,10 +168,91 @@ Section HeapInterpretation.
   
   Definition int_s_wait iτs' iηs' ξ A η D N: iProp Σ :=
     ∃ ti ts U σ,
-      ⌜N!!ξ = Some (Task ts) ∧ D!!name ξ = Some (VConst (Ctid ti)) ∧ td_post U = η ∧ td_alloc U = A⌝ ∧
+      ⌜N!!ξ = Some (Task ts) ∧ D!!name ξ = Some (VConst (Ctid ti)) ∧ td_post U ≡ η ∧ td_alloc U = A⌝ ∧
       task_agree ti U ∗
       ts ⤇ run: (subst (of_val <$> σ) (td_expr U)) ∗ int_s_wait_pre iτs' iηs' U N ts σ.
+
+  Global Instance intT_heap_equiv: Equiv (@intT_heap Σ) :=
+    pointwise_relation conn_map (pointwise_relation name_map (⊣⊢)).
+  Global Instance intT_heap_setoid: Equivalence intT_heap_equiv.
+  Proof.
+    split.
+    - by intros ϕ D N.
+    - intros ϕ ϕ' eqϕ D N.
+      rewrite eqϕ; done.
+    - intros ϕ ϕ' ϕ'' eqϕ eqϕ' D N.
+      rewrite eqϕ eqϕ'; done.
+  Qed.
+
+  Global Instance intT_type_equiv: Equiv (@intT_type Σ) :=
+    pointwise_relation val (pointwise_relation name_map (pointwise_relation val (⊣⊢))).
+  Global Instance intT_type_setoid: Equivalence intT_type_equiv.
+  Proof.
+    split.
+    - by intros ϕ d N v.
+    - intros ϕ ϕ' eqϕ d N v.
+      rewrite eqϕ; done.
+    - intros ϕ ϕ' ϕ'' eqϕ eqϕ' d N v.
+      rewrite eqϕ eqϕ'; done.
+  Qed.
   
+  Global Instance int_i_star_proper: Proper ((≡) ==> (≡) ==> (≡)) int_i_star.
+  Proof.
+    intros ϕ₁ ϕ₁' eqϕ₁ ϕ₂ ϕ₂' eqϕ₂ D N.
+    rewrite /int_i_star; f_equiv.
+    - apply eqϕ₁.
+    - apply eqϕ₂.
+  Qed.
+
+  Global Instance int_s_star_proper: Proper ((≡) ==> (≡) ==> (≡)) int_s_star := int_i_star_proper.
+
+  Global Instance wait_proper t:
+    Proper (pointwise_relation _ (pointwise_relation _ (⊣⊢)) ==> (⊣⊢)) (wait t).
+  Proof.
+    intros ϕ ϕ' eqϕ.
+    rewrite equiv_dist => [n].
+    apply: wait_nonexpansive => [t' v'].
+    rewrite eqϕ; done.
+  Qed.
+  
+  Global Instance int_i_wait_proper ξ A: Proper ((≡) ==> (≡) ==> (≡)) (int_i_wait ξ A).
+  Proof.
+    intros η η' eqη ϕ ϕ' eqϕ D N.
+    rewrite /int_i_wait /int_i_wait_body.
+    f_equiv; intro t.
+    do 2 f_equiv; intros t' v'.
+    f_equiv; intro T.
+    f_equiv; intro D'.
+    f_equiv; intro N'.
+    do 2 f_equiv; last apply eqϕ.
+    rewrite eqη; done.
+  Qed.
+
+  Global Instance wp_proper E e: Proper (pointwise_relation val (≡) ==> (≡)) (wp E e).
+  Proof.
+    intros ϕ ϕ' eqϕ.
+    rewrite equiv_dist => [n].
+    apply: wp_nonexpansive => [v].
+    rewrite eqϕ; done.
+  Qed.
+
+  Global Instance int_s_wait_proper:
+    Proper ((=) ==> pointwise_relation _ (≡) ==> (=) ==> (=) ==> (≡) ==> (≡)) int_s_wait.
+  Proof.
+    intros iτ ? <- iη iη' eqiη ξ ? <- A ? <- η η' eqη D N.
+    rewrite /int_s_wait.
+    f_equiv; intro ti.
+    f_equiv; intro ts.
+    f_equiv; intro U.
+    f_equiv; intro σ.
+    do 3 f_equiv.
+    - do 2 f_equiv.
+      rewrite eqη; done.
+    - rewrite /int_s_wait_pre.
+      f_equiv; intro Npre.
+      do 2 f_equiv.
+      apply eqiη; done.
+  Qed.
 End HeapInterpretation.
 
 Section Interpretations.
@@ -204,6 +285,33 @@ Section Interpretations.
                       η.
   Definition int_s_heap η: @intT_heap Σ := λ D N, ∃ n, int_s_heap_rec n η D N.
 
+  Global Instance int_s_heap_approx_proper (ϕ: hexpr → intT_heap) (ϕ_proper: Proper ((≡) ==> (≡)) ϕ):
+    Proper ((≡) ==> (≡)) (int_s_heap_approx ϕ).
+  Proof.
+    induction 1.
+    - done.
+    - done.
+    - by etrans.
+    - by rewrite /=; f_equiv.
+    - by rewrite /=; f_equiv.
+    - by intros ??; rewrite /= /int_s_star assoc.
+    - by intros ??; rewrite /= /int_s_star comm.
+    - by intros ??; rewrite /= /int_s_star left_id.
+  Qed.
+  Global Instance int_s_heap_rec_proper n: Proper ((≡) ==> (≡)) (int_s_heap_rec n).
+  Proof.
+    induction n as [|n IH]; cbn.
+    - apply int_s_heap_approx_proper; solve_proper.
+    - by apply int_s_heap_approx_proper.
+  Qed.
+  Global Instance int_s_heap_proper: Proper ((≡) ==> (≡)) int_s_heap.
+  Proof.
+    rewrite /int_s_heap.
+    intros η η' eqη D N.
+    f_equiv; intro n.
+    apply int_s_heap_rec_proper; done.
+  Qed.
+  
   Fixpoint int_i_type τ: @intT_type Σ :=
     match τ with
     | tbool => int_i_bool
@@ -218,6 +326,19 @@ Section Interpretations.
     | hpt ξ τ => int_i_pt ξ (int_i_type τ)
     | hwait ξ A η => int_i_wait ξ A η (int_i_heap η)
     end.
+
+  Global Instance int_i_heap_proper: Proper ((≡) ==> (≡)) int_i_heap.
+  Proof.
+    induction 1; rewrite /=.
+    - done.
+    - done.
+    - by etrans.
+    - by f_equiv.
+    - by f_equiv.
+    - by intros ??; rewrite /int_i_star assoc.
+    - by intros ??; rewrite /int_i_star comm.
+    - by intros ??; rewrite /int_i_star left_id.
+  Qed.
 
   Definition int_s_env := int_env_pre int_s_type.
   Definition int_i_env := int_env_pre int_i_type.
@@ -292,7 +413,25 @@ Section Interpretations.
     apply exist_proper; intro.
     tauto.
   Qed.
-  
+
+  Lemma equiv_and_left (P P': Prop) (Q Q': iProp Σ):
+    P ↔ P' → (P → Q ⊣⊢ Q') → (⌜P⌝ ∧ Q ⊣⊢ ⌜P'⌝ ∧ Q').
+  Proof.
+    intros <- eqQ.
+    iSplit.
+    all: iIntros "[% Q]"; iSplit; auto.
+    all: by rewrite eqQ.
+  Qed.
+
+  Lemma equiv_star_left (P P': Prop) (Q Q': iProp Σ):
+    P ↔ P' → (P → Q ⊣⊢ Q') → (⌜P⌝ ∗ Q ⊣⊢ ⌜P'⌝ ∗ Q').
+  Proof.
+    intros <- eqQ.
+    iSplit.
+    all: iIntros "[% Q]"; iSplit; auto.
+    all: by rewrite eqQ.
+  Qed.
+
   Lemma int_s_heap_approx_local
         iη (iη_proper: ∀ (η: hexpr),
                Proper (overlap (conn_heap η) ==> ov η ==> (⊣⊢)) (iη η)) η:
@@ -311,7 +450,7 @@ Section Interpretations.
       rewrite eqD; cycle 1.
       { rewrite elem_of_conn_heap.
         exists ξ; split; auto.
-        rewrite /= elem_of_union elem_of_singleton; auto. }
+        rewrite /= elem_of_singleton; auto. }
       enough (∀ d v, int_s_type τ d N v ⊣⊢ int_s_type τ d N' v) as eqint.
       { by setoid_rewrite eqint. }
       intros; apply int_s_type_local; auto.
@@ -322,22 +461,20 @@ Section Interpretations.
       f_equiv; intro ts.
       f_equiv; intro U.
       f_equiv; intro σ.
-      destruct (decide (td_post U = η)) as [<-|neq].
-      2: iSplit; iIntros "[% _]"; intuition.
-      destruct (decide (td_alloc U = A)) as [<-|neq].
-      2: iSplit; iIntros "[% _]"; intuition.
-      f_equiv.
-      { rewrite (eqN ξ); last (clear; set_solver).
+      apply equiv_and_left.
+      { rewrite (eqN ξ); last (rewrite /= elem_of_union elem_of_singleton; auto).
         rewrite (eqD (name ξ)); first done.
-        rewrite elem_of_conn_heap; exists ξ.
-        split; auto.
-        clear; set_solver. }
-      { do 2 f_equiv.
-        rewrite /int_s_wait_pre.
-        f_equiv; intro Npre.
-        do 4 f_equiv.
-        eapply overlap_iff; last done.
-        apply union_subseteq_r. }
+        rewrite elem_of_conn_heap /=.
+        exists ξ; split; auto.
+        rewrite /= elem_of_union elem_of_singleton; auto. }
+      intros [Nξ [Dξ [eqη <-]]].
+      do 2 f_equiv.
+      rewrite /int_s_wait_pre.
+      f_equiv; intro Npre.
+      do 4 f_equiv.
+      eapply overlap_iff; last done.
+      rewrite eqη.
+      apply union_subseteq_r.
   Qed.
 
   Lemma int_s_heap_rec_local n: ∀ η,
@@ -371,7 +508,7 @@ Section Interpretations.
       rewrite (eqN ξ); last set_solver.
       rewrite (eqD (name ξ)).
       2: rewrite elem_of_conn_heap /=.
-      2: eexists _; split; auto; apply elem_of_union; rewrite elem_of_singleton; auto.
+      2: eexists _; split; auto; rewrite elem_of_singleton; auto.
       assert (N ≡[ names τ ]≡ N') as eqN'.
       { intros ξ' inξ; apply eqN; set_solver. }
       enough (∀ d v, int_i_type τ d N v ⊣⊢ int_i_type τ d N' v) as eqτ.
