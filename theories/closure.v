@@ -565,7 +565,7 @@ Section FullClosure.
     2,3: rewrite -(union_empty_l_L A₂).
     2,3: eapply tywait.
     all: rewrite ?union_empty_r_L ?union_empty_l_L.
-    2,4,5,7,9,10: done.
+    all: try done.
     3,5: apply type_var_string; first apply lookup_insert.
     3,4: done.
     2,3: apply disjoint_union_r; auto.

@@ -246,7 +246,7 @@ Inductive typing: lnames → env → expr → hexpr → lnames → type → hexp
     typing U Γ e η₁ A τ η₂ →
     typing U Γ (Post e) η₁ {[ξ]} (Promise(ξ,A) τ) (Wait(ξ,A) η₂)
 | tywait U Γ e (η₁ η₂ η₃: hexpr) τ ξ A₁ A₂ (wfη: heap_wf (U ∪ A₁ ∪ A₂) (η₂ ⊗ η₃)) (disj: A₂ ⊥ U)
-         (ξ_not_in_τ: ξ ∉ names τ) (ξ_not_in_η₃: ξ ∉ names η₃):
+         (ξ_not_in_τ: ξ ∉ names τ) (ξ_not_in_η₃: ξ ∉ names η₃) (disjA: A₁ ⊥ A₂):
     typing U Γ e η₁ A₁ (ttask ξ A₂ τ) (η₂ ⊗ hwait ξ A₂ η₃) →
     typing U Γ (Wait e) η₁ (A₁ ∪ A₂) τ (η₂ ⊗ η₃)         
 | tyframe U Γ e (η₁ η₂: hexpr) τ A (ηf: hexpr)
